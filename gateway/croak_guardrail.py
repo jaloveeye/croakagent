@@ -34,13 +34,56 @@ from fastapi import HTTPException  # noqa: E402
 from litellm.integrations.custom_guardrail import CustomGuardrail  # noqa: E402
 
 import croak_store  # noqa: E402
-from croak_core import SECRET_PATTERNS, Blocked, apply_deny_paths, find, media_parts, media_pii_action, new_turn, Denied, Policy, apply_profile, check_access, load_policy, resolve, tier_for, tool_names  # noqa: E402
+from croak_core import SECRET_PATTERNS, Blocked, apply_deny_paths, answered_tool_calls, find, media_parts, media_pii_action, new_turn, Denied, Policy, apply_profile, check_access, load_policy, resolve, tier_for, tool_names  # noqa: E402
 
 POLICY_PATH = os.environ.get("CROAK_POLICY", os.path.join(os.path.dirname(os.path.abspath(__file__)), "policy.yaml"))
 AGENT_HEADER = "x-croak-agent"
 SECRET_KINDS = frozenset(SECRET_PATTERNS)
 SESSION_HEADER = "x-croak-session"
 OCR_URL = os.environ.get("CROAK_OCR_URL", "").rstrip("/")
+# croak-auth keeps the execution permits; the gate asks it on an internal route.
+AUTH_INTERNAL_URL = os.environ.get("CROAK_AUTH_INTERNAL_URL", "http://auth:8000").rstrip("/")
+
+
+def internal_token() -> str:
+    """Shared with croak-auth: derived from the master key both services hold."""
+    import hashlib
+
+    return hashlib.sha256(b"croak-internal:" + os.environ.get("LITELLM_MASTER_KEY", "").encode()).hexdigest()
+
+
+async def check_permits(session: str | None, tier: Any, messages: list[dict[str, Any]], post: Any = None) -> None:
+    """Refuses a request that sends back a tool result Gate never permitted.
+
+    A tampered client can skip croakcode's permit check and run tools anyway;
+    this is where its results stop. Any failure to check raises, and the hook
+    turns that into a refusal (fail closed).
+    """
+    if not getattr(tier, "require_permits", False):
+        return
+    calls = answered_tool_calls(messages)
+    if not calls:
+        return
+    if not session:
+        raise Denied("unpermitted_tool", "세션 머리글이 없어 도구 결과의 실행 허가를 확인할 수 없다.", [c["tool"] for c in calls])
+    if post is None:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.post(
+                f"{AUTH_INTERNAL_URL}/internal/permits/check",
+                json={"session": session, "calls": calls},
+                headers={"x-croak-internal": internal_token()},
+            )
+            r.raise_for_status()
+            missing = r.json().get("missing") or []
+    else:
+        missing = await post({"session": session, "calls": calls})
+    if missing:
+        tools = sorted({str(m.get("tool")) for m in missing})
+        raise Denied(
+            "unpermitted_tool",
+            f"실행 허가 없이 실행한 도구의 결과가 있다: {', '.join(tools)}. croakcode의 실행 허가 설정을 켜고 새 세션에서 다시 시작한다.",
+            tools,
+        )
 # Written by the admin console; read-only here.
 OVERRIDES_PATH = os.environ.get("CROAK_OVERRIDES", "/app/settings/policy-overrides.json")
 _overrides: dict[str, Any] = {}
@@ -211,6 +254,7 @@ class CroakGuardrail(CustomGuardrail):
             base.update(tier=tier.name, agent=agent)
             check_access(tier, agent, tool_names(data.get("tools")))
             check_session_owner(headers.get(SESSION_HEADER), who)
+            await check_permits(headers.get(SESSION_HEADER), tier, messages)
             decision = resolve(policy, agent, [*tier.profiles, *granted_profiles(user_api_key_dict)])
             base.update(profile=decision.profile.name, requested=decision.requested, downgraded=decision.downgraded)
             paths = apply_deny_paths(messages, policy.deny_paths)  # before anything reads the text

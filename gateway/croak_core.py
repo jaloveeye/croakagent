@@ -6,7 +6,9 @@ adapt it to LiteLLM.
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import math
 import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
@@ -286,6 +288,8 @@ class Tier:
     profiles: tuple[str, ...] = ()
     # "all": a secret anywhere in the conversation blocks the request.
     secrets_scope: str = "new"
+    # Every tool result must come from a call Gate signed a permit for.
+    require_permits: bool = False
 
 
 # Without a `tiers` section the gate behaves as before: no tier checks.
@@ -298,7 +302,7 @@ def _load_tiers(raw: Any, profiles: dict[str, Profile]) -> dict[str, Tier]:
     tiers: dict[str, Tier] = {}
     for name, rules in raw.items():
         rules = rules or {}
-        unknown = set(rules) - {"agents", "deny_tools", "profiles", "secrets_scope"}
+        unknown = set(rules) - {"agents", "deny_tools", "profiles", "secrets_scope", "require_permits"}
         if unknown:
             raise ValueError(f"tier {name}: unknown keys {sorted(unknown)}")
         lists = {}
@@ -313,7 +317,10 @@ def _load_tiers(raw: Any, profiles: dict[str, Profile]) -> dict[str, Tier]:
         scope = rules.get("secrets_scope", "new")
         if scope not in SECRET_SCOPES:
             raise ValueError(f"tier {name}: secrets_scope must be one of {SECRET_SCOPES}")
-        tiers[str(name)] = Tier(str(name), secrets_scope=scope, **lists)
+        require_permits = rules.get("require_permits", False)
+        if not isinstance(require_permits, bool):
+            raise ValueError(f"tier {name}: require_permits must be true or false")
+        tiers[str(name)] = Tier(str(name), secrets_scope=scope, require_permits=require_permits, **lists)
     if DEFAULT_TIER not in tiers:
         raise ValueError(f"tiers need a '{DEFAULT_TIER}' tier for keys without one")
     return tiers
@@ -328,6 +335,69 @@ def tier_for(policy: Policy, name: str | None) -> Tier:
 
 def matches(name: str, pattern: str) -> bool:
     return pattern == "*" or (name.startswith(pattern[:-1]) if pattern.endswith("*") else name == pattern)
+
+
+# ---------------------------------------------------------------------------
+# Execution permits (croakcode Phase 4): which tool calls came back with a result
+# ---------------------------------------------------------------------------
+
+
+def _js_number(value: Any) -> Any:
+    """Matches JavaScript JSON, which writes an integral float as an integer."""
+    if isinstance(value, bool) or value is None:
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("non-finite number")
+        return int(value) if value.is_integer() and abs(value) < 2**53 else value
+    if isinstance(value, dict):
+        return {str(k): _js_number(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_js_number(v) for v in value]
+    return value
+
+
+def canonical_json(value: Any) -> str:
+    """Same bytes as croakcode's canonicalJson and auth/permit_core.canonical_json."""
+    return json.dumps(_js_number(value), ensure_ascii=False, separators=(",", ":"), sort_keys=True, allow_nan=False)
+
+
+def args_hash(args: Any) -> str:
+    return hashlib.sha256(canonical_json(args).encode("utf-8")).hexdigest()
+
+
+UNREADABLE_ARGS = "unreadable"
+
+
+def answered_tool_calls(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """Tool calls whose result the request sends back to the model.
+
+    Each is {"tool", "args"} with the argument hash croakcode used when it
+    asked for the permit. Arguments that are not JSON get UNREADABLE_ARGS,
+    which no permit matches, so such a call is treated as unpermitted.
+    """
+    answered = {
+        str(m.get("tool_call_id"))
+        for m in messages
+        if isinstance(m, dict) and m.get("role") == "tool" and m.get("tool_call_id")
+    }
+    calls: list[dict[str, str]] = []
+    for message in messages:
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        for call in message.get("tool_calls") or []:
+            if not isinstance(call, dict) or str(call.get("id")) not in answered:
+                continue
+            function = call.get("function") or {}
+            name = str(function.get("name") or "")
+            raw = function.get("arguments")
+            try:
+                args = json.loads(raw) if isinstance(raw, str) else raw if isinstance(raw, dict) else {}
+                digest = args_hash(args)
+            except (ValueError, TypeError):
+                digest = UNREADABLE_ARGS
+            calls.append({"tool": name, "args": digest})
+    return calls
 
 
 class Denied(Exception):

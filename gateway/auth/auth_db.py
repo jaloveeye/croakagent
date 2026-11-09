@@ -59,6 +59,20 @@ CREATE TABLE IF NOT EXISTS events (
   detail JSONB NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS events_ts ON events (ts);
+-- Execution permits issued to croakcode (Phase 4). The guardrail checks every
+-- tool result against this table. No tool arguments are kept, only their hash.
+CREATE TABLE IF NOT EXISTS execution_permits (
+  nonce TEXT PRIMARY KEY,
+  username TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  principal_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  tool TEXT NOT NULL,
+  args_hash TEXT NOT NULL,
+  rev INT NOT NULL,
+  issued_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS execution_permits_call ON execution_permits (session_id, tool, args_hash);
 CREATE TABLE IF NOT EXISTS admin_sessions (
   id_hash TEXT PRIMARY KEY,
   user_id BIGINT NOT NULL REFERENCES users ON DELETE CASCADE,

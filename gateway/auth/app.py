@@ -6,6 +6,8 @@
     POST /auth/logout                ends the session and deletes its gate key
     GET  /auth/me                    who the access token belongs to
     GET  /auth/health                liveness
+    POST /v1/execution-permits       signs a permit for one croakcode tool call
+    POST /internal/permits/check     gate only: which tool calls had no permit
 
 Sessions end at the first Sunday 00:00 (Korea) after login. Access tokens are
 croak-gate keys that live 24 hours at most.
@@ -13,7 +15,9 @@ croak-gate keys that live 24 hours at most.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import html
+import json
 import os
 import secrets
 import threading
@@ -28,6 +32,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 import auth_core as core
 import auth_db as db
 import gate_keys
+import permit_core
 import yaml
 
 POLICY_PATH = os.environ.get("CROAK_POLICY", "/app/policy.yaml")
@@ -36,6 +41,14 @@ PUBLIC_URL = os.environ.get("AUTH_PUBLIC_URL", "")  # set by docker-compose from
 # HMAC key for the login form's CSRF token, derived from the master key so the
 # server .env needs no new secret.
 SECRET = hashlib.sha256(b"croak-auth-csrf:" + os.environ.get("LITELLM_MASTER_KEY", "").encode()).digest()
+# Ed25519 key that signs execution permits. Without it permits are not issued.
+PERMIT_KEY_FILE = os.environ.get("CROAK_PERMIT_KEY_FILE", "/run/croak-secrets/permit-signing.pem")
+# The gate calls /internal/permits/check with this value; derived from the
+# master key both services already hold, so no new secret is needed.
+INTERNAL_TOKEN = hashlib.sha256(b"croak-internal:" + os.environ.get("LITELLM_MASTER_KEY", "").encode()).hexdigest()
+DATA_DIR = os.environ.get("CROAK_DATA", "/data")
+# Permits are kept as long as a login session can last (it ends on Sunday).
+PERMIT_KEEP_DAYS = 8
 IP_LIMIT = 20  # failed logins per IP per lock window
 SWEEP_SECONDS = 300
 
@@ -367,6 +380,80 @@ def tier_rules(tier: str) -> dict:
     }
 
 
+def _session_owner(session_id: str) -> str | None:
+    """Who started this opencode session, from the gate's record (read only)."""
+    path = os.path.join(DATA_DIR, "sessions", hashlib.sha256(session_id.encode("utf-8")).hexdigest() + ".json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            return str(json.load(f).get("owner") or "") or None
+    except (OSError, ValueError):
+        return None
+
+
+@app.post("/v1/execution-permits")
+async def execution_permit(request: Request) -> JSONResponse:
+    """Signs a permit for one tool call of a croakcode session.
+
+    The caller is the access token's user. The same rules as the gate apply:
+    the session must be the caller's, and the tier must not deny the tool.
+    """
+    auth = request.headers.get("authorization", "")
+    key = auth[7:] if auth.lower().startswith("bearer ") else ""
+    t = now()
+    try:
+        body = permit_core.parse_request(await request.json())
+    except ValueError as error:
+        return _error(400, "bad_request", f"허가 요청의 {error} 값이 올바르지 않습니다.")
+    except Exception:
+        return _error(400, "bad_request", "허가 요청이 JSON이 아닙니다.")
+    with db.connect() as conn:
+        session = conn.execute("SELECT * FROM sessions WHERE access_hash = %s", (core.token_hash(key),)).fetchone() if key else None
+        if not session or session["ended_at"] is not None or session["access_expires_at"] <= t:
+            return _error(401, "not_logged_in", "로그인하지 않았습니다. /login으로 로그인하세요.")
+        user = db.user_by_id(conn, session["user_id"])
+        if not user or user["disabled"]:
+            return _error(403, "disabled", "사용할 수 없는 계정입니다.")
+        owner = _session_owner(body["sid"])
+        if owner and owner != user["username"]:
+            return _error(403, "foreign_session", "이 대화는 다른 계정이 시작한 세션입니다.")
+        if permit_core.tool_denied(body["tool"], tier_rules(user["tier"]).get("deny_tools") or []):
+            return _error(403, "tool_denied", f"{user['tier']} 등급은 {body['tool']} 도구를 쓸 수 없습니다.")
+        signing = permit_core.load_private_key(PERMIT_KEY_FILE)
+        if signing is None:
+            return _error(503, "permits_unavailable", "실행 허가를 발급할 수 없습니다. 관리자에게 알립니다.")
+        payload = permit_core.payload(body, int(t.timestamp() * 1000))
+        conn.execute(
+            "INSERT INTO execution_permits (nonce, username, session_id, principal_id, run_id, tool, args_hash, rev, issued_at)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (payload["nonce"], user["username"], body["sid"], body["pid"], body["rid"], body["tool"], body["args"], body["rev"], t),
+        )
+    return JSONResponse({"token": permit_core.sign_token(payload, signing)})
+
+
+@app.post("/internal/permits/check")
+async def check_permits(request: Request) -> JSONResponse:
+    """Gate only (Caddy does not route /internal). Returns the calls without a permit."""
+    given = request.headers.get("x-croak-internal", "")
+    if not hmac.compare_digest(given, INTERNAL_TOKEN) or not os.environ.get("LITELLM_MASTER_KEY"):
+        return _error(403, "forbidden", "내부 경로입니다.")
+    try:
+        body = await request.json()
+        session_id = str(body["session"])
+        calls = [(str(c["tool"]), str(c["args"])) for c in body.get("calls") or []]
+    except Exception:
+        return _error(400, "bad_request", "대조 요청 형식이 올바르지 않습니다.")
+    missing = []
+    with db.connect() as conn:
+        for tool, args in calls:
+            found = conn.execute(
+                "SELECT 1 FROM execution_permits WHERE session_id = %s AND tool = %s AND args_hash = %s LIMIT 1",
+                (session_id, tool, args),
+            ).fetchone()
+            if not found:
+                missing.append({"tool": tool, "args": args})
+    return JSONResponse({"missing": missing})
+
+
 @app.get("/auth/health")
 def health() -> dict:
     return {"ok": True}
@@ -389,6 +476,7 @@ def sweep(t: datetime | None = None) -> int:
             if session.get("key_alias") and gate_keys.delete(session["key_alias"]):
                 conn.execute("UPDATE sessions SET key_deleted = true WHERE id = %s", (session["id"],))
         conn.execute("DELETE FROM auth_codes WHERE expires_at < %s", (t - timedelta(days=1),))
+        conn.execute("DELETE FROM execution_permits WHERE issued_at < %s", (t - timedelta(days=PERMIT_KEEP_DAYS),))
     return count
 
 

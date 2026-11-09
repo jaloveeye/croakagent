@@ -39,6 +39,8 @@ services:
       UPSTREAM_API_KEY_QWEN: ${UPSTREAM_API_KEY_QWEN:?set UPSTREAM_API_KEY_QWEN in .env}
       CROAK_POLICY: /app/gateway/policy.yaml
       CROAK_OCR_URL: http://ocr:8000
+      # Execution permits (croakcode Phase 4): the guardrail asks croak-auth.
+      CROAK_AUTH_INTERNAL_URL: http://auth:8000
       CROAK_OVERRIDES: /app/settings/policy-overrides.json
       CROAK_DATA: /data
       # Owner of the audit and archive files on the host (the gate runs as root).
@@ -98,10 +100,14 @@ services:
       CROAK_POLICY: /app/policy.yaml
       CROAK_DATA: /data
       CROAK_OVERRIDES: /settings/policy-overrides.json
+      # Ed25519 key that signs execution permits (make-permit-key.sh). A
+      # missing key only turns permit issuing off.
+      CROAK_PERMIT_KEY_FILE: /run/croak-secrets/permit-signing.pem
     volumes:
       - ./policy.yaml:/app/policy.yaml:ro
       - ./data:/data:ro
       - ${CROAK_SETTINGS:-./settings}:/settings
+      - ${CROAK_SECRETS:-./secrets}:/run/croak-secrets:ro
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/auth/health')\""]
       interval: 10s

@@ -12,7 +12,7 @@ CodeFrog 그룹의 서버 쪽 저장소다. 클라이언트(opencode 패치, 설
 | `gateway/tls/` | 내부 인증 기관과 서버 인증서를 만드는 스크립트 |
 | `gateway/tests/` | 단위 테스트와 e2e 테스트 |
 | `bench/` | OpenAI 호환 API 스트리밍 벤치마크와 결과 |
-| `docs/` | 설계 문서. 로그인과 권한은 `auth.md` |
+| `docs/` | 설계 문서. 로그인과 권한은 `auth.md`, 실행 허가는 `execution-permits.md` |
 
 ## 구성
 
@@ -33,12 +33,14 @@ opencode ──HTTPS──▶ gate:8443 Caddy ─┬─▶ /v1/*                
 
 ```bash
 cd gateway
-./tls/make-certs.sh          # 처음 한 번: 내부 인증 기관과 서버 인증서
+./tls/make-certs.sh gate.example.internal   # 처음 한 번: 내부 인증 기관과 서버 인증서. 서버 이름을 준다
 ./deploy.sh --diff           # 서버와 다른 점만 본다
 ./deploy.sh                  # 테스트, 차이 확인, 백업, 업로드, 재시작, 상태 확인. 실패하면 되돌린다
 ```
 
-서버는 `user@gate.example.internal:~/croak`이다. 서버의 `.env`(600)는 올리지도 출력하지도 않는다. 형식은 `.env.example`에 있다.
+운영 서버의 주소와 계정은 저장소에 두지 않는다. 배포와 운영 스크립트는 `CROAK_GATE_HOST`(예: `user@gate.example.internal`)를 셸에서 받는다. 서버의 `.env`(600)는 올리지도 출력하지도 않는다. 형식은 `.env.example`에 있고, `CROAK_PUBLIC_URL`을 꼭 넣어야 한다.
+
+운영에만 쓰는 파일은 `.gitignore`로 저장소 밖에 둔다. 일회성 이전 스크립트와 서버 초기 설정 스크립트는 `gateway/local/`, 운영 현황 기록은 `docs/local/`, 벤치마크 결과는 `bench/results/`에 있다.
 
 | 스크립트 | 용도 |
 |---|---|
