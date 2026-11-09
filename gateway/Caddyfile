@@ -1,0 +1,33 @@
+# TLS front for croak-gate. Only the OpenAI-compatible API and the liveness
+# check reach LiteLLM; its admin routes (/key/*, /user/*, UI) stay internal.
+{
+	auto_https off
+	admin off
+}
+
+:8443 {
+	tls /certs/server.crt /certs/server.key
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		-Server
+	}
+
+	@gate path /v1/* /health/liveliness
+	handle @gate {
+		reverse_proxy gate:4000 {
+			# Stream tokens as they arrive.
+			flush_interval -1
+		}
+	}
+
+	@auth path / /auth/* /admin /admin/*
+	handle @auth {
+		reverse_proxy auth:8000
+	}
+
+	handle {
+		respond "not found" 404
+	}
+}

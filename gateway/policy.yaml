@@ -1,0 +1,54 @@
+# Data handling per opencode agent.
+#
+# pii:          allow | mask | block   personal data (resident ID, phone, email, card, passport)
+# secrets:      redact | block         keys, passwords, tokens, private keys
+# store_prompt: masked | none          keep masked prompts and answers in the archive
+#
+# A profile looser than `default` applies only to keys whose metadata grants it:
+#   {"croak_profiles": ["hr-doc"]} or {"croak_profiles": ["*"]}
+# The agent name is a client header, so it can only tighten the rules by itself.
+retention_days: 90
+
+# Exact personal-data values that are never masked. Secrets cannot be listed.
+allow:
+  email:
+    - owner@example.com   # commit author address used in AGENTS.md
+
+profiles:
+  default:
+    pii: mask
+    secrets: block
+    store_prompt: masked
+
+agents:
+  dev-main: default
+  dev-safe: default
+  dev-plan: default
+  dev-doc: default
+  pr-review: default
+  pr-refactor-review: default
+
+# User tiers. croak-auth puts the user's tier in the key metadata
+# (`croak_tier`) at login; a key without one gets `restricted`.
+#   agents:        agents the tier may run ("*" = all). title, summary and
+#                  compaction are opencode's internal agents.
+#   deny_tools:    a request that declares any of these tools is rejected
+#   profiles:      looser profiles the tier may use ("*" = all)
+#   secrets_scope: new = check the newest user message, all = whole conversation
+tiers:
+  full:
+    agents: ["*"]
+    profiles: ["*"]
+  standard:
+    agents: [dev-main, dev-plan, dev-doc, dev-safe, pr-review, general, explore, title, summary, compaction]
+  restricted:
+    agents: [dev-safe, dev-doc, pr-review, title, summary, compaction]
+    deny_tools: [bash, webfetch, websearch]
+    secrets_scope: all
+
+# Keys, certificates and secret files. A tool result from these paths never
+# reaches the model; lines naming them are dropped from search results.
+# The opencode plugin plugins/secret-paths.mjs blocks the same list locally.
+deny_paths:
+  dirs: [.ssh, .aws, .gnupg, .config/croak]
+  files: [.env, "*.env", "*.pem", "*.key", "id_rsa*", "id_ed25519*", "id_ecdsa*"]

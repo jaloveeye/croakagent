@@ -1,0 +1,17 @@
+# Runtime data, certificates, keys and server settings never leave the server.
+gateway/data/
+gateway/certs/
+gateway/settings/
+gateway/secrets/
+gateway/.env
+*.pem
+*.key
+*.crt
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Operational records and one-off scripts with server details, kept locally only.
+bench/results/
+gateway/local/
+docs/local/

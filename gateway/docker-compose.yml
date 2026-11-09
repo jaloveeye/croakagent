@@ -1,0 +1,128 @@
+# croak-gate: a LiteLLM gateway with the croak guardrail, login service and OCR.
+# It has its own Postgres, so LiteLLM schema migrations never touch the
+# existing gateway's database.
+name: croak
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: croak
+      POSTGRES_DB: croak_gate
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U croak -d croak_gate"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  gate:
+    # Pinned by digest: the tag alone could be moved.
+    image: ghcr.io/berriai/litellm-database:v1.83.10-stable@sha256:2dec2d0228b7ad35126e3be5eb8969d8151563dfe5c79a3f25e6ebbd28bf607b
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      ocr:
+        condition: service_healthy
+    ports:
+      # Server-local only: clients come in through the TLS proxy on 8443.
+      - "127.0.0.1:${CROAK_GATE_PORT:-4100}:4000"
+    environment:
+      DATABASE_URL: postgresql://croak:${POSTGRES_PASSWORD}@db:5432/croak_gate
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?set LITELLM_MASTER_KEY in .env}
+      UPSTREAM_API_BASE: ${UPSTREAM_API_BASE:?set UPSTREAM_API_BASE in .env}
+      UPSTREAM_API_KEY: ${UPSTREAM_API_KEY:?set UPSTREAM_API_KEY in .env}
+      UPSTREAM_API_KEY_QWEN: ${UPSTREAM_API_KEY_QWEN:?set UPSTREAM_API_KEY_QWEN in .env}
+      CROAK_POLICY: /app/gateway/policy.yaml
+      CROAK_OCR_URL: http://ocr:8000
+      CROAK_OVERRIDES: /app/settings/policy-overrides.json
+      CROAK_DATA: /data
+      # Owner of the audit and archive files on the host (the gate runs as root).
+      CROAK_DATA_UID: ${CROAK_DATA_UID:-1000}
+      CROAK_DATA_GID: ${CROAK_DATA_GID:-1000}
+    volumes:
+      # Only the files the gate needs; .env stays out of the container.
+      - ./config.yaml:/app/gateway/config.yaml:ro
+      - ./policy.yaml:/app/gateway/policy.yaml:ro
+      - ./croak_core.py:/app/gateway/croak_core.py:ro
+      - ./croak_store.py:/app/gateway/croak_store.py:ro
+      - ./croak_guardrail.py:/app/gateway/croak_guardrail.py:ro
+      - ./croak_archive.py:/app/gateway/croak_archive.py:ro
+      # Settings the admin console writes (read-only here).
+      - ${CROAK_SETTINGS:-./settings}:/app/settings:ro
+      - ./data:/data
+    command: ["--config", "/app/gateway/config.yaml", "--port", "4000"]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  ocr:
+    # Reads text in images and PDFs for the guardrail (ocr/). Not exposed.
+    build: ./ocr
+    image: croak-ocr:local
+    restart: unless-stopped
+    environment:
+      CROAK_RULES: /app/rules
+    volumes:
+      # The gate's own detection rules.
+      - ./croak_core.py:/app/rules/croak_core.py:ro
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  auth:
+    # Login page and tokens (auth/). Built on the server from pinned requirements.
+    build: ./auth
+    image: croak-auth:local
+    # Same account as the gate's data files, so the admin console can read them.
+    user: "${CROAK_DATA_UID:-1000}:${CROAK_DATA_GID:-1000}"
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      gate:
+        condition: service_started
+    environment:
+      AUTH_DATABASE_URL: postgresql://croak:${POSTGRES_PASSWORD}@db:5432/croak_auth
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      GATE_URL: http://gate:4000
+      AUTH_PUBLIC_URL: ${CROAK_PUBLIC_URL:?set CROAK_PUBLIC_URL in .env, e.g. https://gate.example.internal:8443}
+      CROAK_POLICY: /app/policy.yaml
+      CROAK_DATA: /data
+      CROAK_OVERRIDES: /settings/policy-overrides.json
+    volumes:
+      - ./policy.yaml:/app/policy.yaml:ro
+      - ./data:/data:ro
+      - ${CROAK_SETTINGS:-./settings}:/settings
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/auth/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  proxy:
+    # TLS front (see Caddyfile). Pinned by digest.
+    image: caddy:2.8.4-alpine@sha256:af32e97399febea808609119bb21544d0265c58a02836576e32a2d082c262c17
+    restart: unless-stopped
+    depends_on:
+      gate:
+        condition: service_started
+      auth:
+        condition: service_started
+    ports:
+      - "${CROAK_TLS_PORT:-8443}:8443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${CROAK_CERTS:-./certs}/server.crt:/certs/server.crt:ro
+      - ${CROAK_CERTS:-./certs}/server.key:/certs/server.key:ro
+
+volumes:
+  db:

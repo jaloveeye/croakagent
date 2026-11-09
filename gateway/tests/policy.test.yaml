@@ -1,0 +1,19 @@
+# Policy for tests/e2e.py: adds a looser profile to test key grants.
+retention_days: 90
+allow:
+  email: [owner@example.com]
+profiles:
+  default: {pii: mask, secrets: block, store_prompt: masked}
+  hr-doc: {pii: allow, secrets: block, store_prompt: none}
+agents:
+  dev-main: default
+  hr-doc: hr-doc
+  dev-doc: default
+  dev-safe: default
+tiers:
+  full: {agents: ["*"], profiles: ["*"]}
+  standard: {agents: [dev-main, dev-doc, hr-doc, title]}
+  restricted: {agents: [dev-safe, dev-doc, title], deny_tools: [bash, webfetch, websearch], secrets_scope: all}
+deny_paths:
+  dirs: [.ssh, .aws, .gnupg, .config/croak]
+  files: [.env, "*.env", "*.pem", "*.key", "id_rsa*", "id_ed25519*", "id_ecdsa*"]
