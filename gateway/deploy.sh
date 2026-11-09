@@ -19,8 +19,9 @@ SERVER_IP="${HOST#*@}"
 # Made by tls/make-certs.sh. The CA private key is never uploaded.
 CERTS="${CROAK_CERTS_DIR:-$HOME/.config/croak/ca/server}"
 FILES=(docker-compose.yml Caddyfile config.yaml policy.yaml croak_core.py croak_store.py croak_guardrail.py croak_archive.py
-  auth/Dockerfile auth/requirements.txt auth/auth_core.py auth/auth_db.py auth/gate_keys.py auth/app.py auth/cli.py
-  auth/admin.py auth/admin_core.py ocr/Dockerfile ocr/requirements.txt ocr/ocr_service.py)
+  make-permit-key.sh
+  auth/Dockerfile auth/requirements.txt auth/auth_core.py auth/auth_db.py auth/gate_keys.py auth/permit_core.py auth/app.py
+  auth/cli.py auth/admin.py auth/admin_core.py ocr/Dockerfile ocr/requirements.txt ocr/ocr_service.py)
 
 die() { echo "error: $*" >&2; exit 1; }
 # -n: never read local stdin, so the confirmation prompt keeps its input.
