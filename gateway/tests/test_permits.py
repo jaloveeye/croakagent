@@ -51,6 +51,15 @@ class AnsweredCalls(unittest.TestCase):
     def test_unreadable_arguments_never_match_a_permit(self):
         self.assertEqual(answered_tool_calls(conversation(("c1", "bash", "{not json"))), [{"tool": "bash", "args": UNREADABLE_ARGS}])
 
+    def test_tool_call_proxy_counts_as_the_tool_it_called(self):
+        proxied = answered_tool_calls(conversation(("c1", "tool_call", '{"name":"bash","input":{"command":"ls"}}')))
+        self.assertEqual(proxied, [{"tool": "bash", "args": PARITY[0][1]}])
+
+    def test_malformed_tool_call_stays_a_tool_call(self):
+        for args in ('{"name":"bash"}', '{"name":1,"input":{}}', '{"input":{"command":"ls"}}'):
+            with self.subTest(args=args):
+                self.assertEqual(answered_tool_calls(conversation(("c1", "tool_call", args)))[0]["tool"], "tool_call")
+
     def test_no_tools_no_calls(self):
         self.assertEqual(answered_tool_calls([{"role": "user", "content": "hi"}]), [])
 
