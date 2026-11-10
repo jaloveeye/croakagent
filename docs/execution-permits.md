@@ -35,6 +35,10 @@ croakcode가 도구를 실행하기 직전에 게이트의 허가를 받게 한�
 
 3번을 2번보다 먼저 하면, 허가 없이 실행된 도구 결과가 대화에 남은 세션이 모두 거부된다. 대조는 대화 전체의 도구 결과를 보기 때문이다. 이런 사용자는 새 세션을 열어야 한다.
 
+## 대리 호출 도구
+
+croakcode는 실험 기능 `deferred_tools`를 켜면 대부분의 도구를 `tool_call {"name": <도구>, "input": <인자>}`로 부른다. croakcode는 안쪽 도구의 이름과 인자로 허가를 받는다. 그래서 대조도 `tool_call` 결과를 안쪽 도구로 본다(`croak_core.py` `TOOL_PROXY`). `tool_call` 이름으로는 허가를 발급하지 않는다. 그렇게 하면 등급이 막은 도구를 감싸 부를 수 있다.
+
 ## 인자 해시
 
 croakcode는 TypeScript로, 게이트는 Python으로 같은 인자의 해시를 만든다. 두 쪽이 같은 바이트를 만들도록 다음 규칙을 따른다.
@@ -48,4 +52,4 @@ croakcode는 TypeScript로, 게이트는 Python으로 같은 인자의 해시를
 ## 검증
 
 - 단위 테스트: `auth/tests/test_permit_core.py`, `tests/test_permits.py`. 가드레일 대조 테스트는 litellm이 있어야 해서, 로컬에서는 건너뛰고 E2E가 게이트 이미지 안에서 돌린다.
-- E2E: `python3 tests/e2e_permits.py <작업 폴더> [croakcode의 upstream/packages/opencode 경로]`. 발급, 서명, 거부 경우, 대조, croakcode 실제 클라이언트(PT-07)를 로컬 Docker 스택에서 확인한다.
+- E2E: `python3 tests/e2e_permits.py <작업 폴더> [croakcode의 upstream/packages/opencode 경로]`. 로컬 Docker 스택에서 발급, 서명, 거부 경우, 대조를 확인한다. croakcode 경로를 주면 실제 클라이언트(PT-07)와 허가 필수 상태의 한 턴(PT-08)도 확인한다. PT-08은 가짜 모델의 `CALL_TOOL` 지시로 `tool_call`을 부른다.

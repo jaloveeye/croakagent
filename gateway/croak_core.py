@@ -369,12 +369,18 @@ def args_hash(args: Any) -> str:
 UNREADABLE_ARGS = "unreadable"
 
 
+# croakcode (experimental.deferred_tools) sends most tools behind this proxy:
+# tool_call {"name": <tool>, "input": <its arguments>}.
+TOOL_PROXY = "tool_call"
+
+
 def answered_tool_calls(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
     """Tool calls whose result the request sends back to the model.
 
     Each is {"tool", "args"} with the argument hash croakcode used when it
-    asked for the permit. Arguments that are not JSON get UNREADABLE_ARGS,
-    which no permit matches, so such a call is treated as unpermitted.
+    asked for the permit. A tool_call proxy call counts as the tool it called.
+    Arguments that are not JSON get UNREADABLE_ARGS, which no permit matches,
+    so such a call is treated as unpermitted.
     """
     answered = {
         str(m.get("tool_call_id"))
@@ -393,6 +399,10 @@ def answered_tool_calls(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
             raw = function.get("arguments")
             try:
                 args = json.loads(raw) if isinstance(raw, str) else raw if isinstance(raw, dict) else {}
+                # croakcode's deferred-tool proxy: the permit is for the tool it
+                # called, under that tool's own name and arguments.
+                if name == TOOL_PROXY and isinstance(args, dict) and isinstance(args.get("name"), str) and isinstance(args.get("input"), dict):
+                    name, args = args["name"], args["input"]
                 digest = args_hash(args)
             except (ValueError, TypeError):
                 digest = UNREADABLE_ARGS

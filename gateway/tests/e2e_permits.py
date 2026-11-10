@@ -240,6 +240,35 @@ try:
         )
         out = (live.stdout.strip().splitlines() or [""])[-1]
         check("PT-07: croakcode client gets and verifies a real permit", live.returncode == 0 and '"ok":true' in out, out + live.stderr[-300:])
+
+        # 5. PT-08: a whole croakcode turn under require_permits. The mock model
+        # calls todowrite through croakcode's tool_call proxy; the result must
+        # reach the model past the gate's check.
+        project = os.path.join(WORK, "pt08")
+        os.makedirs(project, exist_ok=True)
+        env = {**os.environ, "LITELLM_BASE_URL": f"https://127.0.0.1:{TLS_PORT}/v1", "CROAK_AUTH_URL": f"https://127.0.0.1:{TLS_PORT}",
+               "CROAKCODE_GATE_PERMIT_URL": f"https://127.0.0.1:{TLS_PORT}", "CROAKCODE_GATE_PERMIT_PUBLIC_KEY": PUBLIC,
+               "CROAKCODE_EXECUTION_PERMIT": "required", "CROAK_CONFIG_DIR": cfg, "NODE_EXTRA_CA_CERTS": os.path.join(CERTS, "ca.crt"),
+               "CROAKCODE_CONFIG_DIR": os.path.join(CROAKCODE, "..", "..", ".croakcode")}
+
+        def turn(prompt):
+            done = subprocess.run(
+                ["bun", "run", "--conditions=browser", "src/index.ts", "run", "--format", "json", "--dir", project,
+                 "-m", "litellm-head/qwen3.8-27b-nvfp4", "--agent", "dev-safe", prompt],
+                cwd=CROAKCODE, capture_output=True, text=True, timeout=180, env=env, stdin=subprocess.DEVNULL,
+            )
+            events = [json.loads(line) for line in done.stdout.splitlines() if line.startswith("{")]
+            texts = [e["part"].get("text", "") for e in events if e.get("type") == "text"]
+            errors = [json.dumps(e.get("error"), ensure_ascii=False)[:300] for e in events if e.get("type") == "error"]
+            return texts, errors, events, done.stderr[-400:]
+
+        texts, errors, events, stderr = turn('CALL_TOOL tool_call {"name":"todowrite","input":{"todos":[{"content":"x","status":"pending","priority":"low"}]}}')
+        session_id = next((e.get("sessionID") for e in events if e.get("sessionID")), "")
+        check("PT-08: a tool_call result reaches the model under require_permits",
+              not errors and any(t.startswith("SEEN:") for t in texts), json.dumps({"texts": texts, "errors": errors, "stderr": stderr}, ensure_ascii=False))
+        rows = compose("exec", "-T", "db", "psql", "-U", "croak", "-d", "croak_auth", "-tAc",
+                       f"SELECT count(*) FROM execution_permits WHERE session_id = '{session_id}' AND tool = 'todowrite'").stdout.strip()
+        check("PT-08: the permit is for the tool tool_call called", rows == "1", rows)
 finally:
     if os.environ.get("KEEP") != "1":
         compose("down", "-v", check=False)

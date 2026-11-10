@@ -6,6 +6,7 @@
 #   ./deploy.sh --diff     show the difference only
 #   ./deploy.sh --yes      deploy without asking (the difference is still shown)
 #   ./deploy.sh --yes --no-start   upload only
+#   CROAK_POLICY_FILE=local/policy.yaml ./deploy.sh   upload a production policy kept outside the repository
 #
 # The server keeps its own .env (mode 600); it is never uploaded or printed.
 set -euo pipefail
@@ -18,12 +19,17 @@ TLS_PORT="${CROAK_TLS_PORT:-8443}"
 SERVER_IP="${HOST#*@}"
 # Made by tls/make-certs.sh. The CA private key is never uploaded.
 CERTS="${CROAK_CERTS_DIR:-$HOME/.config/croak/ca/server}"
+# The policy uploaded as policy.yaml. The repository copy holds placeholder
+# addresses; keep the production one outside the repository (local/ is ignored).
+POLICY="${CROAK_POLICY_FILE:-policy.yaml}"
 FILES=(docker-compose.yml Caddyfile config.yaml policy.yaml croak_core.py croak_store.py croak_guardrail.py croak_archive.py
   make-permit-key.sh
   auth/Dockerfile auth/requirements.txt auth/auth_core.py auth/auth_db.py auth/gate_keys.py auth/permit_core.py auth/app.py
   auth/cli.py auth/admin.py auth/admin_core.py ocr/Dockerfile ocr/requirements.txt ocr/ocr_service.py)
 
 die() { echo "error: $*" >&2; exit 1; }
+# The local source of a deployed file.
+src() { if [[ "$1" == policy.yaml ]]; then echo "$POLICY"; else echo "$1"; fi; }
 # -n: never read local stdin, so the confirmation prompt keeps its input.
 remote() { ssh -n -o BatchMode=yes "$HOST" "$@"; }
 MODE="${1:-}"
@@ -35,7 +41,7 @@ cd "$HERE"
 echo "== local tests"
 python3 -m unittest -q tests/test_core.py tests/test_store.py
 python3 -m unittest -q auth/tests/test_auth_core.py auth/tests/test_admin_core.py
-python3 check_policy.py policy.yaml
+python3 check_policy.py "$POLICY"
 
 echo "== server checks ($HOST:~/$DIR)"
 remote "mkdir -p ~/$DIR/data ~/$DIR/backups ~/$DIR/settings && chmod 700 ~/$DIR/data ~/$DIR/backups ~/$DIR/settings"
@@ -60,7 +66,7 @@ fi
 # content. Restart the services whose files changed.
 restart=()
 for f in "${FILES[@]}"; do
-  if ! remote "cat ~/$DIR/$f 2>/dev/null" | diff -u --label "server/$f" --label "local/$f" - "$f"; then
+  if ! remote "cat ~/$DIR/$f 2>/dev/null" | diff -u --label "server/$f" --label "local/$f" - "$(src "$f")"; then
     changed=1
     case "$f" in
       Caddyfile) restart+=(proxy) ;;
@@ -87,7 +93,7 @@ remote "mkdir -p ~/$DIR/backups/$stamp/auth ~/$DIR/backups/$stamp/ocr && cd ~/$D
 
 echo "== upload"
 remote "mkdir -p ~/$DIR/auth ~/$DIR/ocr"
-for f in "${FILES[@]}"; do scp -q "$HERE/$f" "$HOST:$DIR/$f"; done
+for f in "${FILES[@]}"; do scp -q "$HERE/$(src "$f")" "$HOST:$DIR/$f"; done
 if [[ "$certs_changed" == 1 ]]; then
   remote "mkdir -p ~/$DIR/certs && chmod 700 ~/$DIR/certs"
   scp -q "$CERTS/server.crt" "$CERTS/server.key" "$CERTS/ca.crt" "$HOST:$DIR/certs/"
