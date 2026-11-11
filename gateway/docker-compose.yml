@@ -102,6 +102,10 @@ services:
       AUTH_PUBLIC_URL: ${CROAK_PUBLIC_URL:?set CROAK_PUBLIC_URL in .env, e.g. https://gate.example.internal:8443}
       CROAK_POLICY: /app/policy.yaml
       CROAK_MODELS: /app/models.yaml
+      # Minimum client version (docs/client-versions.md): off until every PC
+      # runs a croakcode that sends its version.
+      CROAK_CLIENT_VERSION_ENFORCE: ${CROAK_CLIENT_VERSION_ENFORCE:-0}
+      CROAK_CLIENT_MINIMUM: ${CROAK_CLIENT_MINIMUM:-}
       CROAK_DATA: /data
       CROAK_OVERRIDES: /settings/policy-overrides.json
       # Ed25519 key that signs execution permits (make-permit-key.sh). A
