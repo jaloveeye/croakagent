@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 """Validate a staged release and publish it on the gate host."""
+# The gate host may run an older Python (3.8): keep annotations lazy.
+from __future__ import annotations
+
 import base64
 import io
 import hashlib
