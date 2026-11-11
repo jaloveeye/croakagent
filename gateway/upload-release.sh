@@ -18,6 +18,10 @@ scp -q "$release"/manifest.json "$release"/SHA256SUMS "$release"/croakcode-*.tar
 scp -q "$ca" "$host:$stage/ca.crt"
 if [[ $# == 3 ]]; then
   scp -q "$3/install.sh" "$3/install.ps1" "$host:$stage/"
+  # Double-click setup files; the publisher fills in the gate's address.
+  for setup in croakcode-setup.sh croakcode-setup-windows.cmd; do
+    [[ ! -f "$3/$setup" ]] || scp -q "$3/$setup" "$host:$stage/"
+  done
 fi
 scp -q "$here/publish-downloads.py" "$host:$stage/publish-downloads.py"
 ssh -o BatchMode=yes "$host" "flock -n ~/$dir/.publish-downloads.lock python3 '$stage/publish-downloads.py' '$stage' ~/$dir/downloads"
