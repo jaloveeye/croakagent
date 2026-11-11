@@ -269,6 +269,27 @@ try:
         rows = compose("exec", "-T", "db", "psql", "-U", "croak", "-d", "croak_auth", "-tAc",
                        f"SELECT count(*) FROM execution_permits WHERE session_id = '{session_id}' AND tool = 'todowrite'").stdout.strip()
         check("PT-08: the permit is for the tool tool_call called", rows == "1", rows)
+
+        # 6. PT-09: login alone turns permits on. No permit settings in the
+        # environment; the token answer says the tier requires permits and
+        # carries the key, and croakcode follows it.
+        check("PT-09: the token answer carries the tier's permit settings",
+              tokens.get("execution_permits") == {"required": True, "public_key": PUBLIC}, json.dumps(tokens.get("execution_permits")))
+        login_cfg = os.path.join(WORK, "croak-config-login")
+        os.makedirs(login_cfg, exist_ok=True)
+        with open(os.path.join(login_cfg, "session.json"), "w") as f:
+            keep = ("access_token", "access_expires_at", "refresh_token", "session_expires_at", "execution_permits")
+            json.dump({**{k: tokens[k] for k in keep if k in tokens}, "auth_url": f"https://127.0.0.1:{TLS_PORT}"}, f)
+        os.chmod(os.path.join(login_cfg, "session.json"), 0o600)
+        env = {k: v for k, v in env.items() if not k.startswith("CROAKCODE_EXECUTION_PERMIT") and not k.startswith("CROAKCODE_GATE_PERMIT")}
+        env["CROAK_CONFIG_DIR"] = login_cfg
+        texts, errors, events, stderr = turn('CALL_TOOL tool_call {"name":"todowrite","input":{"todos":[{"content":"y","status":"pending","priority":"low"}]}}')
+        session_id = next((e.get("sessionID") for e in events if e.get("sessionID")), "")
+        check("PT-09: with login only, a tool result reaches the model under require_permits",
+              not errors and any(t.startswith("SEEN:") for t in texts), json.dumps({"texts": texts, "errors": errors, "stderr": stderr}, ensure_ascii=False))
+        rows = compose("exec", "-T", "db", "psql", "-U", "croak", "-d", "croak_auth", "-tAc",
+                       f"SELECT count(*) FROM execution_permits WHERE session_id = '{session_id}' AND tool = 'todowrite'").stdout.strip()
+        check("PT-09: croakcode asked for the permit on its own", rows == "1", rows)
 finally:
     if os.environ.get("KEEP") != "1":
         compose("down", "-v", check=False)

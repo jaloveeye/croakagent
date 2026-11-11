@@ -30,10 +30,13 @@ croakcode가 도구를 실행하기 직전에 게이트의 허가를 받게 한�
 ## 켜는 절차
 
 1. 서버에서 `./make-permit-key.sh`로 서명 키를 만든다. 키는 `secrets/permit-signing.pem`(600)에 생기고, 저장소에는 올라가지 않는다.
-2. 출력된 `CROAKCODE_GATE_PERMIT_PUBLIC_KEY` 값을 사용자 PC의 croakcode 설정에 넣는다. 같은 PC에 `CROAKCODE_GATE_PERMIT_URL`(게이트 주소)과 `CROAKCODE_EXECUTION_PERMIT=required`도 넣는다.
-3. 모든 사용자가 2번을 마친 뒤, `policy.yaml`에서 허가를 요구할 등급에 `require_permits: true`를 넣고 배포한다.
+2. `policy.yaml`에서 허가를 요구할 등급에 `require_permits: true`를 넣고 배포한다.
 
-3번을 2번보다 먼저 하면, 허가 없이 실행된 도구 결과가 대화에 남은 세션이 모두 거부된다. 대조는 대화 전체의 도구 결과를 보기 때문이다. 이런 사용자는 새 세션을 열어야 한다.
+사용자 PC에는 따로 설정할 것이 없다. 로그인 서비스는 로그인과 토큰 갱신 응답에 `execution_permits`를 넣는다. 값은 그 계정 등급이 허가를 요구하는지(`required`)와 허가를 확인할 공개키(`public_key`)다. croakcode는 이 값을 로그인 정보와 함께 저장하고, 그 값에 따라 허가 검증을 한다. `/auth/me`도 같은 값을 돌려준다.
+
+이미 로그인한 PC는 다음 토큰 갱신 때 새 값을 받는다. 접근 토큰은 한 시간마다 갱신된다. 그 사이에 허가 없이 실행한 도구 결과가 대화에 남은 세션은 거부된다. 대조는 대화 전체의 도구 결과를 보기 때문이다. 이런 사용자는 새 세션을 열어야 한다.
+
+croakcode의 환경 변수 `CROAKCODE_EXECUTION_PERMIT`는 로그인 값보다 먼저 적용된다. 시험이나 수동 설정에만 쓴다.
 
 ## 대리 호출 도구
 
@@ -52,4 +55,4 @@ croakcode는 TypeScript로, 게이트는 Python으로 같은 인자의 해시를
 ## 검증
 
 - 단위 테스트: `auth/tests/test_permit_core.py`, `tests/test_permits.py`. 가드레일 대조 테스트는 litellm이 있어야 해서, 로컬에서는 건너뛰고 E2E가 게이트 이미지 안에서 돌린다.
-- E2E: `python3 tests/e2e_permits.py <작업 폴더> [croakcode의 upstream/packages/opencode 경로]`. 로컬 Docker 스택에서 발급, 서명, 거부 경우, 대조를 확인한다. croakcode 경로를 주면 실제 클라이언트(PT-07)와 허가 필수 상태의 한 턴(PT-08)도 확인한다. PT-08은 가짜 모델의 `CALL_TOOL` 지시로 `tool_call`을 부른다.
+- E2E: `python3 tests/e2e_permits.py <작업 폴더> [croakcode의 upstream/packages/opencode 경로]`. 로컬 Docker 스택에서 발급, 서명, 거부 경우, 대조를 확인한다. croakcode 경로를 주면 실제 클라이언트(PT-07), 허가 필수 상태의 한 턴(PT-08), 로그인만으로 켜지는 허가(PT-09)도 확인한다. PT-08은 가짜 모델의 `CALL_TOOL` 지시로 `tool_call`을 부른다.

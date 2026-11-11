@@ -97,3 +97,13 @@ class Request(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ClientSettings(unittest.TestCase):
+    def test_login_carries_the_requirement_and_the_public_key(self):
+        key = Ed25519PrivateKey.generate()
+        self.assertEqual(p.client_settings(True, key), {"required": True, "public_key": p.public_key_b64(key)})
+        self.assertEqual(p.client_settings(False, key)["required"], False)
+
+    def test_no_signing_key_means_no_public_key(self):
+        self.assertEqual(p.client_settings(True, None), {"required": True, "public_key": None})

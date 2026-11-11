@@ -78,6 +78,16 @@ def public_key_b64(key: Ed25519PrivateKey) -> str:
     return base64.b64encode(raw).decode("ascii")
 
 
+def client_settings(required: bool, key: Ed25519PrivateKey | None) -> dict[str, Any]:
+    """What croakcode receives at login: whether this tier needs permits, and the key to verify them.
+
+    croakcode turns permit verification on from this, so a user only logs in.
+    With no signing key the public key is None and croakcode denies every
+    tool, like the gate would.
+    """
+    return {"required": bool(required), "public_key": public_key_b64(key) if key is not None else None}
+
+
 def matches(name: str, pattern: str) -> bool:
     """Same rule as the gate's croak_core.matches: "*" and a trailing "*"."""
     if pattern == "*":

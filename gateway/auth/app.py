@@ -259,7 +259,13 @@ def _token_body(key: str, access_expires: datetime, refresh: str, session: dict,
         "refresh_token": refresh,
         "session_expires_at": session["expires_at"].astimezone(core.KST).isoformat(),
         "user": {"username": user["username"], "tier": user["tier"], "roles": list(user["roles"] or [])},
+        "execution_permits": execution_permits(user["tier"]),
     }
+
+
+def execution_permits(tier: str) -> dict:
+    """The execution-permit settings croakcode applies after login (see permit_core.client_settings)."""
+    return permit_core.client_settings(tier_rules(tier).get("require_permits", False), permit_core.load_private_key(PERMIT_KEY_FILE))
 
 
 def end_session(conn, session: dict, reason: str, actor: str | None = None) -> None:
@@ -358,6 +364,7 @@ def me(request: Request) -> JSONResponse:
                 "username": user["username"],
                 "tier": user["tier"],
                 "rules": tier_rules(user["tier"]),
+                "execution_permits": execution_permits(user["tier"]),
                 "roles": list(user["roles"] or []),
                 "session_expires_at": session["expires_at"].astimezone(core.KST).isoformat(),
                 "access_expires_at": session["access_expires_at"].astimezone(core.KST).isoformat(),
@@ -377,6 +384,7 @@ def tier_rules(tier: str) -> dict:
         "agents": list(rules.get("agents") or []),
         "deny_tools": list(rules.get("deny_tools") or []),
         "secrets_scope": rules.get("secrets_scope", "new"),
+        "require_permits": bool(rules.get("require_permits", False)),
     }
 
 
