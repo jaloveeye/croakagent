@@ -24,15 +24,24 @@
 	# Execution permits and the model list are the login service's.
 	@permit path /v1/execution-permits /v1/croak/*
 	handle @permit {
+		forward_auth auth:8000 {
+			uri /internal/client-version
+		}
 		reverse_proxy auth:8000
 	}
 
-	@gate path /v1/* /health/liveliness
+	@gate path /v1/*
 	handle @gate {
+		forward_auth auth:8000 {
+			uri /internal/client-version
+		}
 		reverse_proxy gate:4000 {
 			# Stream tokens as they arrive.
 			flush_interval -1
 		}
+	}
+	handle /health/liveliness {
+		reverse_proxy gate:4000
 	}
 
 	@auth path / /auth/* /admin /admin/*

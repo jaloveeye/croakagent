@@ -34,9 +34,12 @@ os.makedirs(WORK, exist_ok=True)
 RECORDS = os.path.join(WORK, "records")
 DATA = os.path.join(WORK, "data")
 SETTINGS = os.path.join(WORK, "settings")
-for d in (RECORDS, DATA, SETTINGS):
+DOWNLOADS = os.path.join(WORK, "downloads")
+for d in (RECORDS, DATA, SETTINGS, DOWNLOADS):
     os.makedirs(d, exist_ok=True)
     os.chmod(d, 0o777)  # the containers write here as other users
+with open(os.path.join(DOWNLOADS, "manifest.json"), "w") as f:
+    json.dump({"product": "croakcode", "latest": "1.0.0", "minimum": "1.0.0"}, f)
 ENV = os.path.join(WORK, "test.env")
 with open(ENV, "w") as f:
     f.write(
@@ -55,7 +58,7 @@ subprocess.run(
     capture_output=True,
 )
 COMPOSE = ["docker", "compose", "-f", "docker-compose.yml", "-f", "tests/compose.test.yml", "--env-file", ENV, "-p", "croak-test"]
-ENVIRON = {**os.environ, "CROAK_TEST_RECORDS": RECORDS, "CROAK_TEST_DATA": DATA}
+ENVIRON = {**os.environ, "CROAK_TEST_RECORDS": RECORDS, "CROAK_TEST_DATA": DATA, "CROAK_TEST_DOWNLOADS": DOWNLOADS}
 
 
 def compose(*args, check=True):
@@ -66,7 +69,7 @@ def call(path, body, key, headers=None, base=None, context=None):
     req = urllib.request.Request(
         f"{base or f'http://127.0.0.1:{PORT}'}{path}",
         data=json.dumps(body).encode(),
-        headers={"content-type": "application/json", "authorization": f"Bearer {key}", **(headers or {})},
+        headers={"content-type": "application/json", "authorization": f"Bearer {key}", "x-croak-client-version": "1.0.0", **(headers or {})},
     )
     try:
         with urllib.request.urlopen(req, timeout=60, context=context) as r:
@@ -102,10 +105,10 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None  # return 3xx responses as they are
 
 
-def tls(method, path, body=None, headers=None, form=False):
+def tls(method, path, body=None, headers=None, form=False, include_version=True):
     """Request through the HTTPS front. Returns (status, headers, text)."""
     data = None
-    hdrs = dict(headers or {})
+    hdrs = {**({"x-croak-client-version": "1.0.0"} if include_version else {}), **(headers or {})}
     if body is not None:
         if form:
             data = urllib.parse.urlencode(body).encode()
@@ -363,6 +366,20 @@ try:
           and audit_paths.get("violation") == "path_blocked", json.dumps(audit_paths, ensure_ascii=False)[:300])
 
     # 8. HTTPS front: trusted with the internal CA only, API reachable, admin routes hidden.
+    for route in ("/v1/models", "/v1/croak/models", "/v1/execution-permits"):
+        status, _, body = tls("GET", route, include_version=False)
+        check(f"version header required for {route}", status == 426 and "croakcode upgrade" in body, str(status))
+    status, _, body = tls("POST", "/auth/token", {}, include_version=False)
+    check("version header required for token", status == 426 and "croakcode upgrade" in body, str(status))
+    status, _, _ = tls("GET", "/v1/models", headers={"x-croak-client-version": "0.9.9"})
+    check("old client rejected", status == 426, str(status))
+    _, challenge = pkce()
+    status, _, _ = tls("GET", f"/auth/login?challenge={challenge}", include_version=False)
+    check("browser login needs no version header", status == 200, str(status))
+    status, _, _ = tls("GET", "/download/manifest.json", include_version=False)
+    check("manifest download needs no version header", status == 200, str(status))
+    status, _, _ = tls("GET", "/internal/client-version", include_version=False)
+    check("version check is not exposed", status == 404, str(status))
     tls_base = f"https://127.0.0.1:{TLS_PORT}"
     trusted = ssl.create_default_context(cafile=os.path.join(CERTS, "ca.crt"))
     status, body = call("/v1/chat/completions", {"model": "default", "messages": [{"role": "user", "content": "tls"}]}, plain, {"x-croak-agent": "dev-main"}, base=tls_base, context=trusted)

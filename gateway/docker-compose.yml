@@ -114,6 +114,7 @@ services:
       - ./data:/data:ro
       - ${CROAK_SETTINGS:-./settings}:/settings
       - ${CROAK_SECRETS:-./secrets}:/run/croak-secrets:ro
+      - ./downloads:/downloads:ro
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/auth/health')\""]
       interval: 10s

@@ -30,7 +30,7 @@ CONFIG="$(mktemp)"
 trap 'rm -f "$CONFIG"' EXIT
 FILES=(docker-compose.yml Caddyfile config.yaml models.yaml policy.yaml croak_core.py croak_models.py croak_store.py croak_guardrail.py croak_archive.py
   make-permit-key.sh
-  auth/Dockerfile auth/requirements.txt auth/auth_core.py auth/auth_db.py auth/gate_keys.py auth/permit_core.py auth/app.py
+  auth/Dockerfile auth/requirements.txt auth/auth_core.py auth/auth_db.py auth/gate_keys.py auth/permit_core.py auth/client_version.py auth/app.py
   auth/cli.py auth/admin.py auth/admin_core.py ocr/Dockerfile ocr/requirements.txt ocr/ocr_service.py)
 
 die() { echo "error: $*" >&2; exit 1; }
@@ -54,6 +54,7 @@ cd "$HERE"
 echo "== local tests"
 python3 -m unittest -q tests/test_core.py tests/test_store.py
 python3 -m unittest -q auth/tests/test_auth_core.py auth/tests/test_admin_core.py
+python3 -m unittest -q auth/tests/test_client_version.py
 python3 check_policy.py "$POLICY"
 python3 -m unittest -q tests/test_models.py
 python3 -m unittest -q tests/test_downloads.py

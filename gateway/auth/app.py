@@ -33,6 +33,7 @@ import auth_core as core
 import auth_db as db
 import gate_keys
 import permit_core
+import client_version
 import yaml
 
 POLICY_PATH = os.environ.get("CROAK_POLICY", "/app/policy.yaml")
@@ -47,6 +48,7 @@ PERMIT_KEY_FILE = os.environ.get("CROAK_PERMIT_KEY_FILE", "/run/croak-secrets/pe
 # master key both services already hold, so no new secret is needed.
 INTERNAL_TOKEN = hashlib.sha256(b"croak-internal:" + os.environ.get("LITELLM_MASTER_KEY", "").encode()).hexdigest()
 DATA_DIR = os.environ.get("CROAK_DATA", "/data")
+MANIFEST_PATH = os.environ.get("CROAK_MANIFEST_PATH", "/downloads/manifest.json")
 # Permits are kept as long as a login session can last (it ends on Sunday).
 PERMIT_KEEP_DAYS = 8
 IP_LIMIT = 20  # failed logins per IP per lock window
@@ -70,7 +72,11 @@ def client_ip(request: Request) -> str:
 
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
-    response = await call_next(request)
+    if request.url.path in {"/auth/token", "/auth/me", "/auth/logout"} or request.url.path.startswith("/v1/"):
+        status, body = client_version.check(MANIFEST_PATH, request.headers.get("x-croak-client-version"))
+        response = JSONResponse(body, status_code=status) if status != 200 else await call_next(request)
+    else:
+        response = await call_next(request)
     # A page may set its own policy (the code page allows one nonce script).
     if "content-security-policy" not in response.headers:
         response.headers["Content-Security-Policy"] = CSP
@@ -80,6 +86,12 @@ async def security_headers(request: Request, call_next):
     response.headers["Referrer-Policy"] = "same-origin"
     response.headers["Cache-Control"] = "no-store"
     return response
+
+
+@app.get("/internal/client-version")
+def check_client_version(request: Request) -> JSONResponse:
+    status, body = client_version.check(MANIFEST_PATH, request.headers.get("x-croak-client-version"))
+    return JSONResponse(body, status_code=status)
 
 
 @app.on_event("startup")
