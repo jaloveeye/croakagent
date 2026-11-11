@@ -17,6 +17,9 @@ services:
       - ./tests/policy.test.yaml:/app/gateway/policy.yaml:ro
       - ${CROAK_TEST_DATA:?}:/data
   auth:
+    environment:
+      # The tests check enforcement; production starts with it off.
+      CROAK_CLIENT_VERSION_ENFORCE: "1"
     volumes:
       - ./tests/policy.test.yaml:/app/policy.yaml:ro
       - ${CROAK_TEST_DATA:?}:/data:ro
