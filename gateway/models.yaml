@@ -1,0 +1,40 @@
+# croak gate model registry: the one source of model information (croak_models.py).
+# make_config.py turns it into config.yaml's model_list.
+#
+# This repository copy keeps the current aliases with placeholder model details.
+# The production registry, with the real served model and engine, is kept
+# outside the repository (deploy.sh: CROAK_MODELS_FILE=local/models.yaml).
+upstream_defaults:
+  api_base: os.environ/UPSTREAM_API_BASE
+  api_key: os.environ/UPSTREAM_API_KEY
+  timeout: 1800
+  stream_timeout: 1800
+  num_retries: 0
+
+models:
+  # Older croakcode releases ask for these names; they are not listed to clients.
+  default:
+    listed: false
+    upstream: { model: openai/default }
+  # The upstream issues a separate key for these deployments.
+  qwen3.8-27b-nvfp4:
+    listed: false
+    upstream: { model: openai/qwen3.8-27b-nvfp4, api_key: os.environ/UPSTREAM_API_KEY_QWEN }
+  worker-chat:
+    listed: false
+    upstream: { model: openai/qwen3.8-27b-nvfp4, api_key: os.environ/UPSTREAM_API_KEY_QWEN }
+  # What croakcode uses. Clients see only `display` and the level names.
+  croak:
+    display: 사내 모델
+    served_model: example-model        # recorded with every request, never shown to users
+    engine: unknown                    # vllm | sglang | llamacpp | tensorfold | unknown
+    upstream: { model: openai/croak }
+    reasoning:
+      default: none
+      # Parameters added to the request for each level: the model's own controls
+      # (chat template arguments), never a token budget standing in for a level.
+      levels:
+        none: { chat_template_kwargs: { enable_thinking: false } }
+        low:  { chat_template_kwargs: { enable_thinking: true, reasoning_effort: low } }
+        high: { chat_template_kwargs: { enable_thinking: true, reasoning_effort: high } }
+      max_reasoning_tokens: null       # optional safety cap, not a level

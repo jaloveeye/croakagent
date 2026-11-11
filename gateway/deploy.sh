@@ -7,6 +7,7 @@
 #   ./deploy.sh --yes      deploy without asking (the difference is still shown)
 #   ./deploy.sh --yes --no-start   upload only
 #   CROAK_POLICY_FILE=local/policy.yaml ./deploy.sh   upload a production policy kept outside the repository
+#   CROAK_MODELS_FILE=local/models.yaml ./deploy.sh   generate config.yaml from a production model registry
 #
 # The server keeps its own .env (mode 600); it is never uploaded or printed.
 set -euo pipefail
@@ -22,14 +23,26 @@ CERTS="${CROAK_CERTS_DIR:-$HOME/.config/croak/ca/server}"
 # The policy uploaded as policy.yaml. The repository copy holds placeholder
 # addresses; keep the production one outside the repository (local/ is ignored).
 POLICY="${CROAK_POLICY_FILE:-policy.yaml}"
-FILES=(docker-compose.yml Caddyfile config.yaml policy.yaml croak_core.py croak_store.py croak_guardrail.py croak_archive.py
+# The model registry uploaded as models.yaml; config.yaml is generated from it
+# (make_config.py). The production registry names the real models: keep it in local/.
+MODELS="${CROAK_MODELS_FILE:-models.yaml}"
+CONFIG="$(mktemp)"
+trap 'rm -f "$CONFIG"' EXIT
+FILES=(docker-compose.yml Caddyfile config.yaml models.yaml policy.yaml croak_core.py croak_models.py croak_store.py croak_guardrail.py croak_archive.py
   make-permit-key.sh
   auth/Dockerfile auth/requirements.txt auth/auth_core.py auth/auth_db.py auth/gate_keys.py auth/permit_core.py auth/app.py
   auth/cli.py auth/admin.py auth/admin_core.py ocr/Dockerfile ocr/requirements.txt ocr/ocr_service.py)
 
 die() { echo "error: $*" >&2; exit 1; }
 # The local source of a deployed file.
-src() { if [[ "$1" == policy.yaml ]]; then echo "$POLICY"; else echo "$1"; fi; }
+src() {
+  case "$1" in
+    policy.yaml) echo "$POLICY" ;;
+    models.yaml) echo "$MODELS" ;;
+    config.yaml) echo "$CONFIG" ;;
+    *) echo "$1" ;;
+  esac
+}
 # -n: never read local stdin, so the confirmation prompt keeps its input.
 remote() { ssh -n -o BatchMode=yes "$HOST" "$@"; }
 MODE="${1:-}"
@@ -42,6 +55,8 @@ echo "== local tests"
 python3 -m unittest -q tests/test_core.py tests/test_store.py
 python3 -m unittest -q auth/tests/test_auth_core.py auth/tests/test_admin_core.py
 python3 check_policy.py "$POLICY"
+python3 -m unittest -q tests/test_models.py
+python3 make_config.py "$MODELS" config.base.yaml -o "$CONFIG"
 
 echo "== server checks ($HOST:~/$DIR)"
 remote "mkdir -p ~/$DIR/data ~/$DIR/backups ~/$DIR/settings && chmod 700 ~/$DIR/data ~/$DIR/backups ~/$DIR/settings"
@@ -71,7 +86,7 @@ for f in "${FILES[@]}"; do
     case "$f" in
       Caddyfile) restart+=(proxy) ;;
       croak_core.py) restart+=(gate ocr) ;;
-      config.yaml|croak_*.py) restart+=(gate) ;;
+      config.yaml|models.yaml|croak_*.py) restart+=(gate) ;;
       policy.yaml) restart+=(gate auth) ;;
     esac
   fi
@@ -93,7 +108,11 @@ remote "mkdir -p ~/$DIR/backups/$stamp/auth ~/$DIR/backups/$stamp/ocr && cd ~/$D
 
 echo "== upload"
 remote "mkdir -p ~/$DIR/auth ~/$DIR/ocr"
-for f in "${FILES[@]}"; do scp -q "$HERE/$(src "$f")" "$HOST:$DIR/$f"; done
+for f in "${FILES[@]}"; do
+  from="$(src "$f")"
+  [[ "$from" == /* ]] || from="$HERE/$from"
+  scp -q "$from" "$HOST:$DIR/$f"
+done
 if [[ "$certs_changed" == 1 ]]; then
   remote "mkdir -p ~/$DIR/certs && chmod 700 ~/$DIR/certs"
   scp -q "$CERTS/server.crt" "$CERTS/server.key" "$CERTS/ca.crt" "$HOST:$DIR/certs/"
