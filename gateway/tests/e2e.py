@@ -161,7 +161,7 @@ def check(name, ok, detail=""):
 
 
 try:
-    compose("up", "-d")
+    compose("up", "-d", "--build")  # auth bakes its code into the image
     for _ in range(120):
         try:
             with urllib.request.urlopen(f"http://127.0.0.1:{PORT}/health/liveliness", timeout=2):
@@ -233,6 +233,37 @@ try:
     # 7. No header -> default profile, agent recorded as unknown.
     status, _ = chat(granted, [{"role": "user", "content": "헤더 없음"}])
     check("no header uses default", status == 200 and any(a.get("agent") == "unknown" for a in lines("audit")))
+
+    # 7a. Model registry: a reasoning level becomes the model's own parameters,
+    # and the records name the alias, served model, engine, level and run.
+    def leveled(level=None, run=None):
+        body = {"model": "croak", "messages": [{"role": "user", "content": "추론 수준 시험"}]}
+        if level is not None:
+            body["reasoning_effort"] = level
+        headers = {"x-croak-agent": "dev-main", "x-croak-session": f"ses_{plain[-8:]}", **({"x-croak-run": run} if run else {})}
+        return call("/v1/chat/completions", body, plain, headers)
+    status, _ = leveled("low", "run_e2e_low")
+    sent = last_record()
+    check("reasoning level becomes the model's parameters",
+          status == 200 and sent.get("chat_template_kwargs") == {"enable_thinking": True, "reasoning_effort": "low"} and "reasoning_effort" not in sent,
+          json.dumps(sent, ensure_ascii=False)[:300])
+    status, _ = leveled()
+    sent = last_record()
+    check("the model's default level applies", status == 200 and sent.get("chat_template_kwargs") == {"enable_thinking": False},
+          json.dumps(sent, ensure_ascii=False)[:300])
+    before = len(records())
+    status, body = leveled("max")
+    check("an unknown reasoning level is refused", status == 400 and "reasoning_level" in body and len(records()) == before, f"{status} {body[:200]}")
+    usage = []
+    for _ in range(20):  # the usage line is written after the response
+        usage = [u for u in lines("usage") if u.get("run") == "run_e2e_low"]
+        if usage:
+            break
+        time.sleep(0.25)
+    check("usage names alias, served model, engine, level and run",
+          bool(usage) and {k: usage[-1].get(k) for k in ("alias", "served_model", "engine", "reasoning")}
+          == {"alias": "croak", "served_model": "example-model", "engine": "unknown", "reasoning": "low"},
+          json.dumps(usage[-1:], ensure_ascii=False)[:300])
 
     # 7b. Tiers: agents and tools by the key's croak_tier; no tier means restricted.
     def tiered(key, agent, tools=(), messages=None):
@@ -394,6 +425,14 @@ try:
     me = json.loads(text) if status == 200 else {}
     check("me", me.get("username") == USER and me.get("roles") == ["auditor"], text[:200])
     check("me shows tier rules", "dev-main" in me.get("rules", {}).get("agents", []), text[:300])
+    # 15a. The model list for clients: names and levels, never the served model.
+    status, _, text = tls("GET", "/v1/croak/models", headers={"authorization": f"Bearer {access}"})
+    listed = json.loads(text).get("models", []) if status == 200 else []
+    check("model list shows the listed aliases with their levels",
+          [m.get("id") for m in listed] == ["croak"] and listed[0].get("levels") == ["none", "low", "high"]
+          and listed[0].get("display") == "사내 모델" and "served_model" not in text and "engine" not in text, f"{status} {text[:300]}")
+    status, _, _ = tls("GET", "/v1/croak/models")
+    check("model list needs a login", status == 401, str(status))
     ends = tokens.get("session_expires_at", "")
     check("session ends on Sunday 00:00 KST", ends.endswith("T00:00:00+09:00") and time.strptime(ends[:10], "%Y-%m-%d").tm_wday == 6, ends)
 
