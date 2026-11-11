@@ -35,10 +35,12 @@ MASTER = "sk-test-" + secrets.token_hex(16)
 USER, PASSWORD = "e2e-permit", "correct horse battery staple"
 
 os.makedirs(WORK, exist_ok=True)
-DATA, RECORDS, SETTINGS, SECRETS = (os.path.join(WORK, d) for d in ("data", "records", "settings", "secrets"))
-for d in (DATA, RECORDS, SETTINGS):
+DATA, RECORDS, SETTINGS, SECRETS, DOWNLOADS = (os.path.join(WORK, d) for d in ("data", "records", "settings", "secrets", "downloads"))
+for d in (DATA, RECORDS, SETTINGS, DOWNLOADS):
     os.makedirs(d, exist_ok=True)
     os.chmod(d, 0o777)
+with open(os.path.join(DOWNLOADS, "manifest.json"), "w") as f:
+    json.dump({"product": "croakcode", "latest": "1.0.0", "minimum": "1.0.0"}, f)
 CERTS = os.path.join(WORK, "certs")
 ENV = os.path.join(WORK, "test.env")
 with open(ENV, "w") as f:
@@ -71,7 +73,7 @@ with open(OVERRIDE, "w") as f:
 
 COMPOSE = ["docker", "compose", "-f", "docker-compose.yml", "-f", "tests/compose.test.yml", "-f", OVERRIDE,
            "--env-file", ENV, "-p", "croak-permit-test"]
-ENVIRON = {**os.environ, "CROAK_TEST_RECORDS": RECORDS, "CROAK_TEST_DATA": DATA}
+ENVIRON = {**os.environ, "CROAK_TEST_RECORDS": RECORDS, "CROAK_TEST_DATA": DATA, "CROAK_TEST_DOWNLOADS": DOWNLOADS}
 
 
 def compose(*args, check=True, **kw):
@@ -84,7 +86,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def tls(method, path, body=None, headers=None, form=False, raw=None):
-    data, hdrs = None, dict(headers or {})
+    data, hdrs = None, {"x-croak-client-version": "1.0.0", **(headers or {})}
     if raw is not None:
         data, hdrs["content-type"] = raw, "application/json"
     elif body is not None:
@@ -236,7 +238,7 @@ try:
             ["bun", "run", "script/permit-live-check.ts", sid, "read", json.dumps(read_args)],
             cwd=CROAKCODE, capture_output=True, text=True, timeout=120,
             env={**os.environ, "CROAKCODE_GATE_PERMIT_URL": f"https://127.0.0.1:{TLS_PORT}", "CROAKCODE_GATE_PERMIT_PUBLIC_KEY": PUBLIC,
-                 "CROAK_CONFIG_DIR": cfg, "NODE_EXTRA_CA_CERTS": os.path.join(CERTS, "ca.crt")},
+                 "CROAK_CONFIG_DIR": cfg, "CROAKCODE_DEV_CLIENT_VERSION": "1.0.0", "CROAKCODE_CLIENT_VERSION": "1.0.0", "NODE_EXTRA_CA_CERTS": os.path.join(CERTS, "ca.crt")},
         )
         out = (live.stdout.strip().splitlines() or [""])[-1]
         check("PT-07: croakcode client gets and verifies a real permit", live.returncode == 0 and '"ok":true' in out, out + live.stderr[-300:])
@@ -249,6 +251,7 @@ try:
         env = {**os.environ, "LITELLM_BASE_URL": f"https://127.0.0.1:{TLS_PORT}/v1", "CROAK_AUTH_URL": f"https://127.0.0.1:{TLS_PORT}",
                "CROAKCODE_GATE_PERMIT_URL": f"https://127.0.0.1:{TLS_PORT}", "CROAKCODE_GATE_PERMIT_PUBLIC_KEY": PUBLIC,
                "CROAKCODE_EXECUTION_PERMIT": "required", "CROAK_CONFIG_DIR": cfg, "NODE_EXTRA_CA_CERTS": os.path.join(CERTS, "ca.crt"),
+               "CROAKCODE_DEV_CLIENT_VERSION": "1.0.0",
                "CROAKCODE_CONFIG_DIR": os.path.join(CROAKCODE, "..", "..", ".croakcode")}
 
         def turn(prompt):

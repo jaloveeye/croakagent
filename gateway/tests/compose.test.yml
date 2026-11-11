@@ -1,5 +1,5 @@
 # Local end-to-end test: croak-gate in front of a mock upstream.
-#   docker compose -f docker-compose.yml -f tests/compose.test.yml --env-file <test.env> -p croak-test up -d
+# The e2e scripts supply temporary data, records, and download directories.
 services:
   mock:
     image: python:3.12-alpine
@@ -20,3 +20,7 @@ services:
     volumes:
       - ./tests/policy.test.yaml:/app/policy.yaml:ro
       - ${CROAK_TEST_DATA:?}:/data:ro
+      - ${CROAK_TEST_DOWNLOADS:?}:/downloads:ro
+  proxy:
+    volumes:
+      - ${CROAK_TEST_DOWNLOADS:?}:/downloads:ro
