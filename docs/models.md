@@ -15,13 +15,16 @@
 | `models.<별칭>.limits` | `context`, `output` 토큰 한도 |
 | `models.<별칭>.reasoning` | 추론 수준 `none`, `low`, `high`마다 요청에 더할 값과 기본 수준 |
 
-추론 수준은 모델 고유의 방식(채팅 템플릿 인자 등)으로 적는다. 토큰 예산으로 수준을 흉내 내지 않는다. 예산이 필요하면 `max_reasoning_tokens`에 안전 상한으로만 둔다.
+추론 수준은 모델 고유의 방식(채팅 템플릿 인자 등)으로 적는다. 토큰 예산으로 수준을 흉내 내지 않는다. 지나친 길이를 막을 안전 상한이 필요하면, 그 수준의 값에 엔진의 예산 인자를 함께 적는다.
 
 ## 어디에 쓰이나
 
 - `make_config.py`가 등록부와 `config.base.yaml`로 LiteLLM의 `config.yaml`을 만든다. 저장소의 `config.yaml`은 저장소 등록부로 만든 결과다. `tests/test_models.py`가 둘이 같은지 확인한다.
 - `deploy.sh`는 `CROAK_MODELS_FILE`(기본 `models.yaml`)로 `config.yaml`을 만들어 올린다. 등록부 파일도 함께 올린다.
-- 추론 수준 변환, 요청 기록, 클라이언트 모델 목록은 다음 작업에서 이 등록부를 쓴다.
+- 정책 훅이 요청의 `reasoning_effort`(none, low, high)를 그 모델 수준의 값으로 바꾼다. 수준을 보내지 않으면 기본 수준을 쓴다. 등록부에 없는 수준은 400으로 거부한다. 등록부에 없는 별칭과 수준이 없는 예전 별칭은 그대로 보낸다.
+- 감사 기록과 사용량 기록에 `alias`, `served_model`, `engine`, `reasoning`, `run`을 남긴다. `run`은 croakcode가 보내는 `x-croak-run` 머리글이다.
+- 게이트는 등록부 파일이 바뀌면 다시 읽는다. 컨테이너 재시작은 `config.yaml`이 바뀔 때만 필요하다.
+- 클라이언트 모델 목록은 다음 작업에서 이 등록부를 쓴다.
 
 ## 운영 등록부
 

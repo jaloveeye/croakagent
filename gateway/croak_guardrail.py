@@ -33,6 +33,7 @@ import yaml  # noqa: E402
 from fastapi import HTTPException  # noqa: E402
 from litellm.integrations.custom_guardrail import CustomGuardrail  # noqa: E402
 
+import croak_models  # noqa: E402
 import croak_store  # noqa: E402
 from croak_core import SECRET_PATTERNS, Blocked, apply_deny_paths, answered_tool_calls, find, media_parts, media_pii_action, new_turn, Denied, Policy, apply_profile, check_access, load_policy, resolve, tier_for, tool_names  # noqa: E402
 
@@ -40,6 +41,10 @@ POLICY_PATH = os.environ.get("CROAK_POLICY", os.path.join(os.path.dirname(os.pat
 AGENT_HEADER = "x-croak-agent"
 SECRET_KINDS = frozenset(SECRET_PATTERNS)
 SESSION_HEADER = "x-croak-session"
+# croakcode sends the agent run id, so the gate's records join its audit by run.
+RUN_HEADER = "x-croak-run"
+# The model registry (croak_models.py): reasoning levels and what to record per alias.
+MODELS_PATH = os.environ.get("CROAK_MODELS", "/app/gateway/models.yaml")
 OCR_URL = os.environ.get("CROAK_OCR_URL", "").rstrip("/")
 # croak-auth keeps the execution permits; the gate asks it on an internal route.
 AUTH_INTERNAL_URL = os.environ.get("CROAK_AUTH_INTERNAL_URL", "http://auth:8000").rstrip("/")
@@ -255,6 +260,8 @@ class CroakGuardrail(CustomGuardrail):
             check_access(tier, agent, tool_names(data.get("tools")))
             check_session_owner(headers.get(SESSION_HEADER), who)
             await check_permits(headers.get(SESSION_HEADER), tier, messages)
+            served = croak_models.apply_level(croak_models.current_models(MODELS_PATH).get(str(data.get("model"))), data)
+            base.update(served, run=headers.get(RUN_HEADER))
             decision = resolve(policy, agent, [*tier.profiles, *granted_profiles(user_api_key_dict)])
             base.update(profile=decision.profile.name, requested=decision.requested, downgraded=decision.downgraded)
             paths = apply_deny_paths(messages, policy.deny_paths)  # before anything reads the text
@@ -270,6 +277,9 @@ class CroakGuardrail(CustomGuardrail):
         except Denied as denied:
             croak_store.append("audit", {**base, "action": "block", "violation": denied.code, "denied": denied.detail})
             raise HTTPException(status_code=403, detail={"error": f"[croak] {denied.reason}", "violation": denied.code})
+        except croak_models.UnknownLevel as unknown:
+            croak_store.append("audit", {**base, "action": "block", "violation": "reasoning_level"})
+            raise HTTPException(status_code=400, detail={"error": f"[croak] {unknown}", "violation": "reasoning_level"})
         except Blocked as blocked:
             code = "secret" if any(k in blocked.found for k in SECRET_KINDS) else "pii"
             croak_store.append("audit", {**base, "action": "block", "violation": code, "found": blocked.found})
@@ -305,6 +315,8 @@ class CroakGuardrail(CustomGuardrail):
             "pii": decision.profile.pii,
             "store_prompt": decision.profile.store_prompt,
             "session": headers.get(SESSION_HEADER),
+            # Which model served the request and how hard it thought (croak_models.apply_level).
+            **{k: base.get(k) for k in ("alias", "served_model", "engine", "reasoning", "run")},
             # Masked text read from images, for the archive (which keeps no image data).
             "media_text": media["texts"],
             **who,

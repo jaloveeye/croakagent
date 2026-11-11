@@ -23,7 +23,6 @@ UPSTREAM_KEYS = ("model", "api_base", "api_key", "timeout", "stream_timeout", "n
 class Reasoning:
     default: str
     levels: dict[str, dict[str, Any]]
-    max_reasoning_tokens: int | None = None
 
 
 @dataclass(frozen=True)
@@ -90,12 +89,74 @@ def _reasoning(name: str, raw: dict[str, Any]) -> Reasoning:
     default = str(raw.get("default", "none"))
     if default not in LEVELS:
         raise ValueError(f"model {name}: reasoning.default must be one of {', '.join(LEVELS)}")
-    cap = raw.get("max_reasoning_tokens")
-    if cap is not None and not (isinstance(cap, int) and cap > 0):
-        raise ValueError(f"model {name}: max_reasoning_tokens is a positive integer or null")
-    return Reasoning(default=default, levels={k: dict(levels[k]) for k in LEVELS}, max_reasoning_tokens=cap)
+    if set(raw) - {"default", "levels"}:
+        raise ValueError(f"model {name}: reasoning takes 'default' and 'levels' (a safety cap goes into a level's parameters)")
+    return Reasoning(default=default, levels={k: dict(levels[k]) for k in LEVELS})
 
 
 def model_list(models: list[Model]) -> list[dict[str, Any]]:
     """LiteLLM's model_list: one entry per alias, pointing at the upstream."""
     return [{"model_name": m.name, "litellm_params": dict(m.upstream)} for m in models]
+
+
+class UnknownLevel(ValueError):
+    """The request asked for a reasoning level the model does not define."""
+
+
+def _merge(into: dict[str, Any], extra: dict[str, Any]) -> None:
+    for key, value in extra.items():
+        if isinstance(value, dict) and isinstance(into.get(key), dict):
+            _merge(into[key], value)
+        else:
+            into[key] = value
+
+
+def apply_level(model: Model | None, data: dict[str, Any]) -> dict[str, Any]:
+    """Turns the request's reasoning level into the model's own parameters.
+
+    croakcode sends reasoning_effort none, low or high. For a model with
+    reasoning levels it is removed and that level's parameters are merged into
+    the request; without one the model's default level applies. Aliases the
+    registry does not know, or that have no levels (older clients), pass
+    unchanged. Returns what to record about the request.
+    """
+    if model is None:
+        return {"alias": data.get("model"), "served_model": "unknown", "engine": "unknown", "reasoning": None}
+    record = {"alias": model.name, "served_model": model.served_model, "engine": model.engine, "reasoning": None}
+    if model.reasoning is None:
+        return record
+    asked = data.pop("reasoning_effort", None)
+    level = str(asked) if asked is not None else model.reasoning.default
+    if level not in model.reasoning.levels:
+        raise UnknownLevel(f"추론 수준 {level}은 이 모델에 없다. {', '.join(LEVELS)} 가운데 하나를 쓴다.")
+    _merge(data, _copy(model.reasoning.levels[level]))
+    record["reasoning"] = level
+    return record
+
+
+def _copy(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {k: _copy(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_copy(v) for v in value]
+    return value
+
+
+_cache: dict[str, Any] = {"path": None, "mtime": None, "models": {}}
+
+
+def current_models(path: str) -> dict[str, Model]:
+    """The registry at path by alias, reloaded when the file changes. A missing file is empty."""
+    import os
+
+    import yaml
+
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return {}
+    if _cache["path"] != path or _cache["mtime"] != mtime:
+        with open(path, encoding="utf-8") as f:
+            models = load_registry(yaml.safe_load(f) or {})
+        _cache.update(path=path, mtime=mtime, models={m.name: m for m in models})
+    return _cache["models"]

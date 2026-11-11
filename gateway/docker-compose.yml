@@ -38,6 +38,7 @@ services:
       UPSTREAM_API_KEY: ${UPSTREAM_API_KEY:?set UPSTREAM_API_KEY in .env}
       UPSTREAM_API_KEY_QWEN: ${UPSTREAM_API_KEY_QWEN:?set UPSTREAM_API_KEY_QWEN in .env}
       CROAK_POLICY: /app/gateway/policy.yaml
+      CROAK_MODELS: /app/gateway/models.yaml
       CROAK_OCR_URL: http://ocr:8000
       # Execution permits (croakcode Phase 4): the guardrail asks croak-auth.
       CROAK_AUTH_INTERNAL_URL: http://auth:8000
@@ -50,7 +51,9 @@ services:
       # Only the files the gate needs; .env stays out of the container.
       - ./config.yaml:/app/gateway/config.yaml:ro
       - ./policy.yaml:/app/gateway/policy.yaml:ro
+      - ./models.yaml:/app/gateway/models.yaml:ro
       - ./croak_core.py:/app/gateway/croak_core.py:ro
+      - ./croak_models.py:/app/gateway/croak_models.py:ro
       - ./croak_store.py:/app/gateway/croak_store.py:ro
       - ./croak_guardrail.py:/app/gateway/croak_guardrail.py:ro
       - ./croak_archive.py:/app/gateway/croak_archive.py:ro

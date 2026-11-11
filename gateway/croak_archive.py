@@ -59,7 +59,8 @@ class CroakArchive(CustomLogger):
                 "duration_ms": int((end_time - start_time).total_seconds() * 1000),
                 "usage": _usage(kwargs.get("complete_streaming_response") or response_obj),
             }
-            croak_store.append("usage", {k: common.get(k) for k in ("user", "tier", "agent", "model", "session", "duration_ms", "usage")})
+            keys = ("user", "tier", "agent", "model", "alias", "served_model", "engine", "reasoning", "session", "run", "duration_ms", "usage")
+            croak_store.append("usage", {k: common.get(k) for k in keys})
             if croak.get("store_prompt") != "masked":
                 return
             messages = kwargs.get("messages") or []

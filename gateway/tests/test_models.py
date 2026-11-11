@@ -7,7 +7,7 @@ import yaml
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
-from croak_models import load_registry, model_list  # noqa: E402
+from croak_models import UnknownLevel, apply_level, load_registry, model_list  # noqa: E402
 from make_config import render  # noqa: E402
 
 LEVELS = {"none": {}, "low": {"x": 1}, "high": {"x": 2}}
@@ -38,6 +38,45 @@ class Generated(unittest.TestCase):
         self.assertEqual(set(croak.reasoning.levels), {"none", "low", "high"})
 
 
+class Levels(unittest.TestCase):
+    model = load_registry(registry(served_model="m-1", engine="vllm", reasoning={
+        "default": "none",
+        "levels": {"none": {"chat_template_kwargs": {"t": False}},
+                   "low": {"chat_template_kwargs": {"t": True, "e": "low"}},
+                   "high": {"chat_template_kwargs": {"t": True, "e": "high"}}}}))[0]
+
+    def test_a_level_becomes_the_model_parameters_and_is_recorded(self):
+        data = {"model": "croak", "reasoning_effort": "low", "chat_template_kwargs": {"keep": 1}}
+        record = apply_level(self.model, data)
+        self.assertEqual(data, {"model": "croak", "chat_template_kwargs": {"keep": 1, "t": True, "e": "low"}})
+        self.assertEqual(record, {"alias": "croak", "served_model": "m-1", "engine": "vllm", "reasoning": "low"})
+
+    def test_no_level_means_the_default(self):
+        data = {"model": "croak"}
+        self.assertEqual(apply_level(self.model, data)["reasoning"], "none")
+        self.assertEqual(data["chat_template_kwargs"], {"t": False})
+
+    def test_an_unknown_level_is_refused(self):
+        with self.assertRaises(UnknownLevel):
+            apply_level(self.model, {"model": "croak", "reasoning_effort": "max"})
+
+    def test_the_registry_is_not_changed_by_a_request(self):
+        apply_level(self.model, {"model": "croak", "reasoning_effort": "high"})["reasoning"]
+        data = {"model": "croak", "reasoning_effort": "high"}
+        apply_level(self.model, data)
+        data["chat_template_kwargs"]["t"] = "changed"
+        self.assertEqual(self.model.reasoning.levels["high"]["chat_template_kwargs"]["t"], True)
+
+    def test_unknown_aliases_and_older_ones_pass_unchanged(self):
+        data = {"model": "other", "reasoning_effort": "low"}
+        self.assertEqual(apply_level(None, data), {"alias": "other", "served_model": "unknown", "engine": "unknown", "reasoning": None})
+        self.assertEqual(data, {"model": "other", "reasoning_effort": "low"})
+        legacy = load_registry({"models": {"default": {"upstream": {"model": "openai/default"}}}})[0]
+        data = {"model": "default", "chat_template_kwargs": {"enable_thinking": False}}
+        self.assertIsNone(apply_level(legacy, data)["reasoning"])
+        self.assertEqual(data, {"model": "default", "chat_template_kwargs": {"enable_thinking": False}})
+
+
 class Rejected(unittest.TestCase):
     def check(self, data, message):
         with self.assertRaises(ValueError) as caught:
@@ -51,7 +90,7 @@ class Rejected(unittest.TestCase):
         self.check(registry(colour="red"), "unknown keys")
         self.check(registry(reasoning={"levels": {"none": {}, "low": {}}}), "exactly none, low, high")
         self.check(registry(reasoning={"levels": LEVELS, "default": "max"}), "reasoning.default")
-        self.check(registry(reasoning={"levels": LEVELS, "max_reasoning_tokens": 0}), "max_reasoning_tokens")
+        self.check(registry(reasoning={"levels": LEVELS, "max_reasoning_tokens": 1024}), "safety cap")
         self.check(registry(limits={"context": -1}), "limits")
 
     def test_a_base_config_with_its_own_model_list_is_refused(self):

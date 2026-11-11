@@ -37,4 +37,4 @@ models:
         none: { chat_template_kwargs: { enable_thinking: false } }
         low:  { chat_template_kwargs: { enable_thinking: true, reasoning_effort: low } }
         high: { chat_template_kwargs: { enable_thinking: true, reasoning_effort: high } }
-      max_reasoning_tokens: null       # optional safety cap, not a level
+      # A safety cap, if ever needed, is added to a level in the engine's own terms.
