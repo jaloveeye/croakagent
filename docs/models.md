@@ -24,7 +24,7 @@
 - 정책 훅이 요청의 `reasoning_effort`(none, low, high)를 그 모델 수준의 값으로 바꾼다. 수준을 보내지 않으면 기본 수준을 쓴다. 등록부에 없는 수준은 400으로 거부한다. 등록부에 없는 별칭과 수준이 없는 예전 별칭은 그대로 보낸다.
 - 감사 기록과 사용량 기록에 `alias`, `served_model`, `engine`, `reasoning`, `run`을 남긴다. `run`은 croakcode가 보내는 `x-croak-run` 머리글이다.
 - 게이트는 등록부 파일이 바뀌면 다시 읽는다. 컨테이너 재시작은 `config.yaml`이 바뀔 때만 필요하다.
-- 클라이언트 모델 목록은 다음 작업에서 이 등록부를 쓴다.
+- 로그인 서비스의 `GET /v1/croak/models`(로그인 필요)가 클라이언트에게 목록을 준다. 항목은 `listed`인 별칭의 `id`, `display`, `levels`, `default_level`, `limits`다. `served_model`과 `engine`은 주지 않는다.
 
 ## 운영 등록부
 

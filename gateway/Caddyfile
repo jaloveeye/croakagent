@@ -16,7 +16,8 @@
 
 	# Execution permits for croakcode tool calls are signed by croak-auth.
 	# Listed before @gate, which would otherwise take every /v1/* path.
-	@permit path /v1/execution-permits
+	# Execution permits and the model list are the login service's.
+	@permit path /v1/execution-permits /v1/croak/*
 	handle @permit {
 		reverse_proxy auth:8000
 	}

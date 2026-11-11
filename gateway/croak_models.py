@@ -160,3 +160,21 @@ def current_models(path: str) -> dict[str, Model]:
             models = load_registry(yaml.safe_load(f) or {})
         _cache.update(path=path, mtime=mtime, models={m.name: m for m in models})
     return _cache["models"]
+
+
+def client_list(models: list[Model]) -> list[dict[str, Any]]:
+    """What a logged-in client may know: the listed aliases, their names, levels and limits.
+
+    The served model and engine are left out; they are for the records only.
+    """
+    return [
+        {
+            "id": m.name,
+            "display": m.display,
+            "levels": list(m.reasoning.levels) if m.reasoning else [],
+            "default_level": m.reasoning.default if m.reasoning else None,
+            "limits": dict(m.limits),
+        }
+        for m in models
+        if m.listed
+    ]

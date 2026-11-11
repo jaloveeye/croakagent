@@ -101,6 +101,7 @@ services:
       GATE_URL: http://gate:4000
       AUTH_PUBLIC_URL: ${CROAK_PUBLIC_URL:?set CROAK_PUBLIC_URL in .env, e.g. https://gate.example.internal:8443}
       CROAK_POLICY: /app/policy.yaml
+      CROAK_MODELS: /app/models.yaml
       CROAK_DATA: /data
       CROAK_OVERRIDES: /settings/policy-overrides.json
       # Ed25519 key that signs execution permits (make-permit-key.sh). A
@@ -108,6 +109,8 @@ services:
       CROAK_PERMIT_KEY_FILE: /run/croak-secrets/permit-signing.pem
     volumes:
       - ./policy.yaml:/app/policy.yaml:ro
+      - ./models.yaml:/app/models.yaml:ro
+      - ./croak_models.py:/app/croak_models.py:ro
       - ./data:/data:ro
       - ${CROAK_SETTINGS:-./settings}:/settings
       - ${CROAK_SECRETS:-./secrets}:/run/croak-secrets:ro

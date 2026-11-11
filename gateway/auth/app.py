@@ -349,14 +349,39 @@ async def logout(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True})
 
 
-@app.get("/auth/me")
-def me(request: Request) -> JSONResponse:
+MODELS_PATH = os.environ.get("CROAK_MODELS", "/app/models.yaml")
+
+
+@app.get("/v1/croak/models")
+def croak_models_list(request: Request) -> JSONResponse:
+    """The models croakcode shows: names and reasoning levels from the gate's registry, never the served model."""
+    import croak_models  # mounted from gateway/ next to app.py
+
+    with db.connect() as conn:
+        if _logged_in_session(conn, request) is None:
+            return _error(401, "not_logged_in", "로그인하지 않았습니다. /login으로 로그인하세요.")
+    try:
+        models = list(croak_models.current_models(MODELS_PATH).values())
+    except ValueError:
+        return _error(500, "registry_invalid", "모델 등록부를 읽지 못했습니다. 관리자에게 문의하세요.")
+    return JSONResponse({"models": croak_models.client_list(models)})
+
+
+def _logged_in_session(conn, request: Request) -> dict | None:
+    """The session of the request's access token, if it is still valid."""
     auth = request.headers.get("authorization", "")
     key = auth[7:] if auth.lower().startswith("bearer ") else ""
-    t = now()
+    session = conn.execute("SELECT * FROM sessions WHERE access_hash = %s", (core.token_hash(key),)).fetchone() if key else None
+    if not session or session["ended_at"] is not None or session["access_expires_at"] <= now():
+        return None
+    return session
+
+
+@app.get("/auth/me")
+def me(request: Request) -> JSONResponse:
     with db.connect() as conn:
-        session = conn.execute("SELECT * FROM sessions WHERE access_hash = %s", (core.token_hash(key),)).fetchone() if key else None
-        if not session or session["ended_at"] is not None or session["access_expires_at"] <= t:
+        session = _logged_in_session(conn, request)
+        if session is None:
             return _error(401, "not_logged_in", "로그인하지 않았습니다. /login으로 로그인하세요.")
         user = db.user_by_id(conn, session["user_id"])
         return JSONResponse(

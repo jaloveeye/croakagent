@@ -7,7 +7,7 @@ import yaml
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
-from croak_models import UnknownLevel, apply_level, load_registry, model_list  # noqa: E402
+from croak_models import UnknownLevel, apply_level, client_list, load_registry, model_list  # noqa: E402
 from make_config import render  # noqa: E402
 
 LEVELS = {"none": {}, "low": {"x": 1}, "high": {"x": 2}}
@@ -75,6 +75,20 @@ class Levels(unittest.TestCase):
         data = {"model": "default", "chat_template_kwargs": {"enable_thinking": False}}
         self.assertIsNone(apply_level(legacy, data)["reasoning"])
         self.assertEqual(data, {"model": "default", "chat_template_kwargs": {"enable_thinking": False}})
+
+
+class ClientList(unittest.TestCase):
+    def test_only_listed_aliases_with_names_levels_and_limits(self):
+        with open(os.path.join(HERE, "models.yaml"), encoding="utf-8") as f:
+            listed = client_list(load_registry(yaml.safe_load(f)))
+        self.assertEqual(listed, [{"id": "croak", "display": "사내 모델", "levels": ["none", "low", "high"], "default_level": "none", "limits": {}}])
+        self.assertNotIn("served_model", json_text(listed))
+        self.assertNotIn("engine", json_text(listed))
+
+
+def json_text(value):
+    import json
+    return json.dumps(value, ensure_ascii=False)
 
 
 class Rejected(unittest.TestCase):
