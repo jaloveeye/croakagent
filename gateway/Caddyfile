@@ -14,6 +14,11 @@
 		-Server
 	}
 
+	handle_path /download/* {
+		root * /downloads
+		file_server
+	}
+
 	# Execution permits for croakcode tool calls are signed by croak-auth.
 	# Listed before @gate, which would otherwise take every /v1/* path.
 	# Execution permits and the model list are the login service's.
