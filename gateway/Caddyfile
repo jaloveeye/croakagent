@@ -14,6 +14,8 @@
 		-Server
 	}
 
+	# People type the page address without the trailing slash; send them to it.
+	redir /download /download/ 308
 	handle_path /download/* {
 		root * /downloads
 		file_server
