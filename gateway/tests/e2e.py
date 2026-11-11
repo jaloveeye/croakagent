@@ -378,6 +378,9 @@ try:
     check("browser login needs no version header", status == 200, str(status))
     status, _, _ = tls("GET", "/download/manifest.json", include_version=False)
     check("manifest download needs no version header", status == 200, str(status))
+    status, headers, _ = tls("GET", "/download", include_version=False)
+    check("the page address without a trailing slash redirects to it",
+          status == 308 and headers.get("location") == "/download/", f"{status} {headers.get('location')}")
     status, _, _ = tls("GET", "/internal/client-version", include_version=False)
     check("version check is not exposed", status == 404, str(status))
     tls_base = f"https://127.0.0.1:{TLS_PORT}"
