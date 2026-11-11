@@ -56,10 +56,11 @@ python3 -m unittest -q tests/test_core.py tests/test_store.py
 python3 -m unittest -q auth/tests/test_auth_core.py auth/tests/test_admin_core.py
 python3 check_policy.py "$POLICY"
 python3 -m unittest -q tests/test_models.py
+python3 -m unittest -q tests/test_downloads.py
 python3 make_config.py "$MODELS" config.base.yaml -o "$CONFIG"
 
 echo "== server checks ($HOST:~/$DIR)"
-remote "mkdir -p ~/$DIR/data ~/$DIR/backups ~/$DIR/settings && chmod 700 ~/$DIR/data ~/$DIR/backups ~/$DIR/settings"
+remote "mkdir -p ~/$DIR/data ~/$DIR/backups ~/$DIR/settings ~/$DIR/downloads && chmod 700 ~/$DIR/data ~/$DIR/backups ~/$DIR/settings && chmod 755 ~/$DIR/downloads"
 mode="$(remote "stat -c %a ~/$DIR/.env 2>/dev/null || echo missing")"
 [[ "$mode" == "600" ]] || die "~/$DIR/.env on the server is '$mode'. Create it from .env.example with mode 600 first."
 

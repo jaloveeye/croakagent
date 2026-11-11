@@ -135,6 +135,7 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ${CROAK_CERTS:-./certs}/server.crt:/certs/server.crt:ro
       - ${CROAK_CERTS:-./certs}/server.key:/certs/server.key:ro
+      - ./downloads:/downloads:ro
 
 volumes:
   db:
