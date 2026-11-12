@@ -453,6 +453,61 @@ try:
           and listed[0].get("display") == "사내 모델" and "served_model" not in text and "engine" not in text, f"{status} {text[:300]}")
     status, _, _ = tls("GET", "/v1/croak/models")
     check("model list needs a login", status == 401, str(status))
+    # 15b. Chat-only keys for chat programs on the user's PC (Open WebUI and the like).
+    def as_chat_program(key, body):
+        """Like a chat program: no croakcode version, agent or session header."""
+        return tls("POST", "/v1/chat/completions", {"model": "default", **body},
+                   {"authorization": f"Bearer {key}"}, include_version=False)
+
+    login_auth = {"authorization": f"Bearer {access}"}
+    status, _, text = tls("GET", "/auth/chat-keys", headers=login_auth)
+    check("chat keys start empty", status == 200 and json.loads(text).get("keys") == [], f"{status} {text[:200]}")
+    status, _, text = tls("POST", "/auth/chat-keys", {"name": "Open WebUI", "days": 7}, login_auth)
+    made = json.loads(text) if status == 200 else {}
+    chat_key = made.get("key", "")
+    check("a login makes a chat key, shown once", status == 200 and chat_key.startswith("sk-") and made.get("name") == "Open WebUI"
+          and made.get("base_url", "").endswith("/v1"), f"{status} {text[:200]}")
+    status, _, text = as_chat_program(chat_key, {"messages": [{"role": "user", "content": "대화 키 시험"}]})
+    check("a chat key chats without croakcode headers", status == 200 and "ECHO" in text, f"{status} {text[:200]}")
+    chat_audit = [a for a in lines("audit") if a.get("client") == "chat"]
+    check("its audit says chat client and chat agent", bool(chat_audit) and chat_audit[-1].get("agent") == "chat"
+          and chat_audit[-1].get("user") == USER, json.dumps(chat_audit[-1:], ensure_ascii=False))
+    status, _, text = as_chat_program(chat_key, {"messages": [{"role": "user", "content": "hi"}],
+                                                 "tools": [{"type": "function", "function": {"name": "web_search", "parameters": {}}}]})
+    check("a chat key may not declare tools", status == 403 and "chat_key_tools" in text, f"{status} {text[:200]}")
+    status, _, text = as_chat_program(chat_key, {"messages": [{"role": "user", "content": "hi"},
+                                                              {"role": "assistant", "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "x", "arguments": "{}"}}]},
+                                                              {"role": "tool", "tool_call_id": "c1", "content": "result"}]})
+    check("a chat key may not send tool results", status == 403 and "chat_key_tools" in text, f"{status} {text[:200]}")
+    status, _, text = as_chat_program(access, {"messages": [{"role": "user", "content": "hi"}]})
+    check("a login key is refused outside croakcode", status in (403, 426), f"{status} {text[:200]}")
+    status, _, text = tls("POST", "/v1/chat/completions", {"model": "default", "messages": [{"role": "user", "content": "hi"}]},
+                          login_auth)
+    check("a login key without the agent header is refused", status == 403 and "client_required" in text, f"{status} {text[:200]}")
+    status, _, _ = tls("GET", "/auth/chat-keys", headers={"authorization": f"Bearer {chat_key}"})
+    check("a chat key cannot make more chat keys", status == 401, str(status))
+    status, _, _ = tls("GET", "/v1/croak/models", headers={"authorization": f"Bearer {chat_key}"})
+    check("a chat key is not a croakcode login", status == 401, str(status))
+    status, _, text = tls("POST", "/auth/chat-keys", {"name": "x", "days": 91}, login_auth)
+    check("a chat key lives at most 90 days", status == 400 and "invalid_days" in text, f"{status} {text[:200]}")
+    extra = [tls("POST", "/auth/chat-keys", {"name": f"k{i}"}, login_auth) for i in range(5)]
+    check("five open chat keys at most", [st for st, _, _ in extra] == [200, 200, 200, 200, 409], str([st for st, _, _ in extra]))
+    listed = json.loads(tls("GET", "/auth/chat-keys", headers=login_auth)[2]).get("keys", [])
+    check("the list shows names, never keys", len(listed) == 5 and "key" not in listed[0] and chat_key not in json.dumps(listed), json.dumps(listed)[:300])
+    status, _, _ = tls("DELETE", f"/auth/chat-keys/{made.get('id')}", headers=login_auth)
+    check("deleting a chat key", status == 200, str(status))
+    status, _, text = as_chat_program(chat_key, {"messages": [{"role": "user", "content": "hi"}]})
+    check("a deleted chat key stops working, and says so", status == 401 and "chat_key_revoked" in text, f"{status} {text[:200]}")
+    expiring = json.loads(extra[0][2]).get("key", "")
+    psql(f"UPDATE chat_keys SET expires_at = now() - interval '1 second' WHERE id = {json.loads(extra[0][2]).get('id')}")
+    swept = compose("exec", "-T", "auth", "python", "cli.py", "sweep", check=False)
+    status, _, text = as_chat_program(expiring, {"messages": [{"role": "user", "content": "hi"}]})
+    rows = psql(f"SELECT revoke_reason || ' ' || key_deleted FROM chat_keys WHERE id = {json.loads(extra[0][2]).get('id')}")
+    check("sweep revokes an expired chat key and deletes it at the gate", status == 401 and rows == "expired true",
+          f"{status} {rows} {swept.stderr[-200:]}")
+    stored = psql("SELECT string_agg(key_hash, '') FROM chat_keys") + psql("SELECT string_agg(detail::text, '') FROM events")
+    check("chat keys are not stored in clear", chat_key and chat_key not in stored and expiring not in stored)
+
     ends = tokens.get("session_expires_at", "")
     check("session ends on Sunday 00:00 KST", ends.endswith("T00:00:00+09:00") and time.strptime(ends[:10], "%Y-%m-%d").tm_wday == 6, ends)
 
@@ -573,7 +628,22 @@ try:
     st, _, _ = tls("POST", "/v1/chat/completions", {"model": "default", "messages": [{"role": "user", "content": "x"}]},
                    {"authorization": f"Bearer {new_key}", "x-croak-agent": "dev-doc"})
     check("new restricted user works with dev-doc", st == 200, str(st))
+    st, _, text = tls("POST", "/auth/chat-keys", {"name": "webui"}, {"authorization": f"Bearer {new_key}"})
+    new_chat = json.loads(text).get("key", "") if st == 200 else ""
+    spare = json.loads(tls("POST", "/auth/chat-keys", {"name": "spare"}, {"authorization": f"Bearer {new_key}"})[2]).get("id")
+    status, _, text = tls("GET", "/admin/chat-keys", headers=admin)
+    check("admin sees open chat keys, never the key", status == 200 and "e2e-new" in text and "webui" in text
+          and new_chat and new_chat not in text, str(status))
+    status, _, text = tls("GET", "/admin/chat-keys", headers=auditor)
+    check("auditor cannot manage chat keys", status == 403, str(status))
+    status, _, text = tls("POST", f"/admin/chat-keys/{spare}/revoke", {"csrf": csrf}, admin, form=True)
+    check("admin revokes one chat key", status == 200 and psql(f"SELECT revoke_reason FROM chat_keys WHERE id = {spare}") == "revoked_by_admin",
+          str(status))
     tls("POST", "/admin/users/e2e-new/lock", {"csrf": csrf}, admin, form=True)
+    st, _, _ = tls("POST", "/v1/chat/completions", {"model": "default", "messages": [{"role": "user", "content": "x"}]},
+                   {"authorization": f"Bearer {new_chat}"}, include_version=False)
+    check("lock revokes the user's chat keys", st in (401, 403) and psql(
+        "SELECT count(*) FROM chat_keys k JOIN users u ON u.id = k.user_id WHERE u.username = 'e2e-new' AND k.revoked_at IS NULL") == "0", str(st))
     st, _, _ = tls("POST", "/v1/chat/completions", {"model": "default", "messages": [{"role": "user", "content": "x"}]},
                    {"authorization": f"Bearer {new_key}", "x-croak-agent": "dev-doc"})
     check("lock kills the user's key", st in (400, 401, 403), str(st))

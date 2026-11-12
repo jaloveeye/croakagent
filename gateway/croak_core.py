@@ -436,6 +436,57 @@ def tool_names(tools: Any) -> list[str]:
 INTERNAL_AGENTS = frozenset({"title", "summary", "compaction"})
 
 
+# Chat-only keys (croak-auth /auth/chat-keys) carry croak_client: chat. They are
+# for chat programs such as Open WebUI on the user's own PC, whose tools run
+# outside croakcode's execution permits, so the gate refuses every tool use.
+CHAT_CLIENT = "chat"
+CHAT_AGENT = "chat"
+
+
+def chat_tool_use(data: dict) -> list[str]:
+    """The parts of a request that use tools. A chat-only key may send none of them."""
+    found = set()
+    if data.get("tools"):
+        found.add("tools")
+    if data.get("functions"):
+        found.add("functions")
+    if data.get("tool_choice") not in (None, "none"):
+        found.add("tool_choice")
+    if data.get("function_call") not in (None, "none"):
+        found.add("function_call")
+    for message in data.get("messages") or []:
+        if not isinstance(message, dict):
+            continue
+        if message.get("role") in ("tool", "function"):
+            found.add("tool_result")
+        if message.get("tool_calls") or message.get("function_call"):
+            found.add("tool_call")
+    return sorted(found)
+
+
+def client_agent(metadata: dict, agent_header: str | None, data: dict) -> str:
+    """The agent name for a request after checking which client may use the key.
+
+    A chat-only key is always the "chat" agent and may not use tools. A
+    croakcode login key (it names a login session) must come from croakcode,
+    which names its agent on every request; a key an administrator issued
+    (issue-key.sh) keeps working from any client.
+    """
+    if metadata.get("croak_client") == CHAT_CLIENT:
+        used = chat_tool_use(data)
+        if used:
+            raise Denied("chat_key_tools", "대화 전용 키로는 도구를 쓸 수 없다. 도구가 필요하면 croakcode를 쓴다.", used)
+        return CHAT_AGENT
+    agent = (agent_header or "").strip()
+    if metadata.get("croak_session") and not agent:
+        raise Denied(
+            "client_required",
+            "이 키는 croakcode 전용이다. 다른 대화 프로그램에는 croakcode에서 /chatkey로 대화 전용 키를 만들어 쓴다.",
+            [],
+        )
+    return agent or "unknown"
+
+
 def check_access(tier: Tier, agent: str, tools: list[str]) -> None:
     """Raises Denied when the tier does not allow the agent or any listed tool.
 

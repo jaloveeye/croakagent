@@ -72,7 +72,8 @@ def client_ip(request: Request) -> str:
 
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
-    if request.url.path in {"/auth/token", "/auth/me", "/auth/logout"} or request.url.path.startswith("/v1/"):
+    if (request.url.path in {"/auth/token", "/auth/me", "/auth/logout"} or request.url.path.startswith("/v1/")
+            or request.url.path.startswith("/auth/chat-keys")):
         status, body = client_version.check(MANIFEST_PATH, request.headers.get("x-croak-client-version"))
         response = JSONResponse(body, status_code=status) if status != 200 else await call_next(request)
     else:
@@ -91,6 +92,14 @@ async def security_headers(request: Request, call_next):
 @app.get("/internal/client-version")
 def check_client_version(request: Request) -> JSONResponse:
     status, body = client_version.check(MANIFEST_PATH, request.headers.get("x-croak-client-version"))
+    # A chat program (Open WebUI and the like) sends no croakcode version. Its
+    # chat-only key passes here; the guardrail refuses tools with it.
+    if status == 426:
+        row = _chat_key_of(request, active_only=False)
+        if row is not None and row["revoked_at"] is None and row["expires_at"] > now():
+            return JSONResponse({"ok": True, "client": "chat"})
+        if row is not None:
+            return _error(401, "chat_key_revoked", "이 대화 전용 키는 지워졌거나 만료됐습니다. croakcode에서 /chatkey로 새 키를 만드세요.")
     return JSONResponse(body, status_code=status)
 
 
@@ -409,6 +418,140 @@ def me(request: Request) -> JSONResponse:
         )
 
 
+# ---------------------------------------------------------------------------
+# Chat-only keys: for a chat program on the user's own PC (Open WebUI and the
+# like). A croakcode login issues them; the key is shown once and only its
+# hash is kept. The guardrail refuses tools with them (croak_client: chat).
+# ---------------------------------------------------------------------------
+
+
+def _bearer(request: Request) -> str:
+    auth = request.headers.get("authorization", "")
+    return auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+
+
+def _chat_key_of(request: Request, active_only: bool = True) -> dict | None:
+    """The chat key the request carries, if any (only an open one unless active_only is off)."""
+    key = _bearer(request)
+    if not key:
+        return None
+    with db.connect() as conn:
+        row = conn.execute("SELECT * FROM chat_keys WHERE key_hash = %s", (core.token_hash(key),)).fetchone()
+    if row and active_only and (row["revoked_at"] is not None or row["expires_at"] <= now()):
+        return None
+    return row
+
+
+def _chat_key_body(row: dict) -> dict:
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "created_at": row["created_at"].astimezone(core.KST).isoformat(),
+        "expires_at": row["expires_at"].astimezone(core.KST).isoformat(),
+    }
+
+
+def _active_chat_keys(conn, user_id: int) -> list[dict]:
+    return conn.execute(
+        "SELECT * FROM chat_keys WHERE user_id = %s AND revoked_at IS NULL AND expires_at > now() ORDER BY id",
+        (user_id,),
+    ).fetchall()
+
+
+def revoke_chat_key(conn, row: dict, reason: str, actor: str | None = None) -> None:
+    if row.get("revoked_at") is None:
+        conn.execute("UPDATE chat_keys SET revoked_at = now(), revoke_reason = %s WHERE id = %s", (reason, row["id"]))
+    deleted = gate_keys.delete(row["key_alias"])
+    conn.execute("UPDATE chat_keys SET key_deleted = %s WHERE id = %s", (deleted, row["id"]))
+    user = db.user_by_id(conn, row["user_id"])
+    db.event(conn, "chat_key_revoked", actor=actor, subject=user["username"] if user else None, key_id=row["id"], reason=reason)
+
+
+def revoke_chat_keys(conn, user_id: int, reason: str, actor: str | None = None) -> int:
+    """Revokes every open chat key of a user (a tier change, a lock, an admin's revoke)."""
+    rows = conn.execute("SELECT * FROM chat_keys WHERE user_id = %s AND revoked_at IS NULL", (user_id,)).fetchall()
+    for row in rows:
+        revoke_chat_key(conn, row, reason, actor)
+    return len(rows)
+
+
+def _chat_key_user(conn, request: Request) -> tuple[dict | None, JSONResponse | None]:
+    """The user behind a croakcode login token. A chat key cannot manage chat keys."""
+    session = _logged_in_session(conn, request)
+    if session is None:
+        return None, _error(401, "not_logged_in", "croakcode에 로그인한 뒤 다시 시도하세요.")
+    user = db.user_by_id(conn, session["user_id"])
+    if not user or user["disabled"]:
+        return None, _error(403, "account_disabled", "잠긴 계정입니다.")
+    return user, None
+
+
+@app.get("/auth/chat-keys")
+def chat_keys_list(request: Request) -> JSONResponse:
+    with db.connect() as conn:
+        user, error = _chat_key_user(conn, request)
+        if error:
+            return error
+        keys = [_chat_key_body(row) for row in _active_chat_keys(conn, user["id"])]
+    return JSONResponse({"keys": keys, "limit": core.CHAT_KEY_LIMIT, "max_days": core.CHAT_KEY_MAX_DAYS,
+                         "base_url": f"{PUBLIC_URL}/v1" if PUBLIC_URL else None})
+
+
+@app.post("/auth/chat-keys")
+async def chat_key_create(request: Request) -> JSONResponse:
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    if not isinstance(body, dict):
+        return _error(400, "invalid_request", "JSON body required")
+    name = core.chat_key_name(body.get("name"))
+    if name is None:
+        return _error(400, "invalid_name", "키 이름은 1~40자로 씁니다.")
+    days = core.chat_key_days(body.get("days"))
+    if days is None:
+        return _error(400, "invalid_days", f"유효 기간은 1~{core.CHAT_KEY_MAX_DAYS}일입니다.")
+    with db.connect() as conn:
+        user, error = _chat_key_user(conn, request)
+        if error:
+            return error
+        if len(_active_chat_keys(conn, user["id"])) >= core.CHAT_KEY_LIMIT:
+            return _error(409, "chat_key_limit", f"대화 전용 키는 {core.CHAT_KEY_LIMIT}개까지 둘 수 있습니다. 쓰지 않는 키를 지우세요.")
+        t = now()
+        expires = t + timedelta(days=days)
+        key_id = conn.execute("SELECT nextval(pg_get_serial_sequence('chat_keys', 'id')) AS id").fetchone()["id"]
+        alias = core.chat_key_alias(user["username"], key_id)
+        try:
+            key = gate_keys.issue_chat(alias, user, key_id, expires, t)
+        except Exception:
+            return _error(502, "gate_unavailable", "게이트에서 키를 만들지 못했습니다. 잠시 뒤 다시 시도하세요.")
+        try:
+            row = conn.execute(
+                "INSERT INTO chat_keys (id, user_id, name, key_alias, key_hash, expires_at) VALUES (%s, %s, %s, %s, %s, %s) RETURNING *",
+                (key_id, user["id"], name, alias, core.token_hash(key), expires),
+            ).fetchone()
+        except Exception:
+            gate_keys.delete(alias)
+            raise
+        db.event(conn, "chat_key_created", actor=user["username"], subject=user["username"], ip=client_ip(request),
+                 key_id=key_id, days=days)
+    return JSONResponse({**_chat_key_body(row), "key": key, "base_url": f"{PUBLIC_URL}/v1" if PUBLIC_URL else None})
+
+
+@app.delete("/auth/chat-keys/{key_id}")
+def chat_key_delete(request: Request, key_id: int) -> JSONResponse:
+    with db.connect() as conn:
+        user, error = _chat_key_user(conn, request)
+        if error:
+            return error
+        row = conn.execute("SELECT * FROM chat_keys WHERE id = %s AND user_id = %s AND revoked_at IS NULL",
+                           (key_id, user["id"])).fetchone()
+        if not row:
+            return _error(404, "not_found", "없는 키입니다.")
+        revoke_chat_key(conn, row, "revoked_by_user", actor=user["username"])
+    return JSONResponse({"ok": True})
+
+
 def tier_rules(tier: str) -> dict:
     """What the gate allows this tier, from the same policy.yaml (for /whoami)."""
     try:
@@ -510,7 +653,7 @@ def health() -> dict:
 
 
 def sweep(t: datetime | None = None) -> int:
-    """Ends sessions past Sunday 00:00 and retries gate keys that were not deleted."""
+    """Ends sessions past Sunday 00:00, revokes expired chat keys, and retries gate keys that were not deleted."""
     t = t or now()
     count = 0
     with db.connect() as conn:
@@ -520,6 +663,11 @@ def sweep(t: datetime | None = None) -> int:
         for session in conn.execute("SELECT * FROM sessions WHERE ended_at IS NOT NULL AND NOT key_deleted").fetchall():
             if session.get("key_alias") and gate_keys.delete(session["key_alias"]):
                 conn.execute("UPDATE sessions SET key_deleted = true WHERE id = %s", (session["id"],))
+        for row in conn.execute("SELECT * FROM chat_keys WHERE revoked_at IS NULL AND expires_at <= %s", (t,)).fetchall():
+            revoke_chat_key(conn, row, "expired")
+        for row in conn.execute("SELECT * FROM chat_keys WHERE revoked_at IS NOT NULL AND NOT key_deleted").fetchall():
+            if gate_keys.delete(row["key_alias"]):
+                conn.execute("UPDATE chat_keys SET key_deleted = true WHERE id = %s", (row["id"],))
         conn.execute("DELETE FROM auth_codes WHERE expires_at < %s", (t - timedelta(days=1),))
         conn.execute("DELETE FROM execution_permits WHERE issued_at < %s", (t - timedelta(days=PERMIT_KEEP_DAYS),))
     return count

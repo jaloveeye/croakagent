@@ -14,6 +14,8 @@ from croak_core import (  # noqa: E402
     Denied,
     Profile,
     check_access,
+    chat_tool_use,
+    client_agent,
     tier_for,
     tool_names,
     apply_profile,
@@ -468,3 +470,41 @@ class Paths(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ChatKeys(unittest.TestCase):
+    """Chat-only keys (croak_client: chat) for Open WebUI and the like."""
+
+    CHAT = {"croak_client": "chat", "croak_tier": "standard"}
+    LOGIN = {"croak_session": "s1", "croak_tier": "standard"}
+
+    def test_plain_chat_is_the_chat_agent(self):
+        data = {"messages": [{"role": "system", "content": "s"}, {"role": "user", "content": "hi"}]}
+        self.assertEqual(client_agent(self.CHAT, "dev-main", data), "chat")
+        self.assertEqual(chat_tool_use({**data, "tool_choice": "none"}), [])
+
+    def test_any_tool_use_is_refused(self):
+        cases = {
+            "tools": {"tools": [{"type": "function", "function": {"name": "web_search"}}]},
+            "functions": {"functions": [{"name": "f"}]},
+            "tool_choice": {"tool_choice": "auto"},
+            "tool_result": {"messages": [{"role": "tool", "tool_call_id": "1", "content": "x"}]},
+            "tool_call": {"messages": [{"role": "assistant", "tool_calls": [{"id": "1"}]}]},
+        }
+        for part, extra in cases.items():
+            data = {"messages": [{"role": "user", "content": "hi"}], **extra}
+            with self.subTest(part=part):
+                with self.assertRaises(Denied) as caught:
+                    client_agent(self.CHAT, None, data)
+                self.assertEqual(caught.exception.code, "chat_key_tools")
+                self.assertIn(part, caught.exception.detail)
+
+    def test_a_login_key_needs_croakcode(self):
+        data = {"messages": [{"role": "user", "content": "hi"}]}
+        with self.assertRaises(Denied) as caught:
+            client_agent(self.LOGIN, None, data)
+        self.assertEqual(caught.exception.code, "client_required")
+        self.assertEqual(client_agent(self.LOGIN, "dev-main", data), "dev-main")
+
+    def test_an_issued_key_keeps_working_without_an_agent(self):
+        self.assertEqual(client_agent({"croak_tier": "full"}, None, {"messages": []}), "unknown")

@@ -81,3 +81,23 @@ class Accounts(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ChatKeyRules(unittest.TestCase):
+    def test_name(self):
+        self.assertEqual(c.chat_key_name("  Open WebUI  "), "Open WebUI")
+        for bad in ("", "   ", "x" * 41, "a\nb", None, 3):
+            with self.subTest(bad=bad):
+                self.assertIsNone(c.chat_key_name(bad))
+
+    def test_days(self):
+        self.assertEqual(c.chat_key_days(None), c.CHAT_KEY_DEFAULT_DAYS)
+        self.assertEqual(c.chat_key_days(""), c.CHAT_KEY_DEFAULT_DAYS)
+        self.assertEqual(c.chat_key_days(7), 7)
+        self.assertEqual(c.chat_key_days("90"), 90)
+        for bad in (0, 91, -1, "x", True, 1.5):
+            with self.subTest(bad=bad):
+                self.assertIsNone(c.chat_key_days(bad))
+
+    def test_alias(self):
+        self.assertEqual(c.chat_key_alias("kim", 12), "croak-chat-kim-12")

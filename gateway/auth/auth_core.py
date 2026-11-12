@@ -20,6 +20,11 @@ MIN_PASSWORD = 12
 LOCK_AFTER = 5
 LOCK_FOR = timedelta(minutes=15)
 
+# Chat-only keys (Open WebUI and the like on the user's own PC).
+CHAT_KEY_DEFAULT_DAYS = 30
+CHAT_KEY_MAX_DAYS = 90
+CHAT_KEY_LIMIT = 5
+
 TIERS = ("full", "standard", "restricted")
 ROLES = ("admin", "auditor")
 
@@ -100,3 +105,32 @@ def unsign(secret: bytes, signed: str) -> str | None:
 
 def locked(failed: int, last_failed: datetime | None, now: datetime) -> bool:
     return failed >= LOCK_AFTER and last_failed is not None and now - last_failed < LOCK_FOR
+
+
+def chat_key_name(name: object) -> str | None:
+    """A chat key's label as the user typed it, trimmed; None when it is not usable."""
+    if not isinstance(name, str):
+        return None
+    name = name.strip()
+    if not 1 <= len(name) <= 40 or any(ord(ch) < 32 or ord(ch) == 127 for ch in name):
+        return None
+    return name
+
+
+def chat_key_days(days: object) -> int | None:
+    """Days a new chat key lives: the default when not given, None when out of range."""
+    if days is None or days == "":
+        return CHAT_KEY_DEFAULT_DAYS
+    if isinstance(days, bool):
+        return None
+    try:
+        value = int(days)
+    except (TypeError, ValueError):
+        return None
+    if isinstance(days, float) and days != value:
+        return None
+    return value if 1 <= value <= CHAT_KEY_MAX_DAYS else None
+
+
+def chat_key_alias(username: str, key_id: int) -> str:
+    return f"croak-chat-{username}-{key_id}"

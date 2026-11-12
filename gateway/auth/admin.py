@@ -27,7 +27,7 @@ import admin_core as ac
 import auth_core as core
 import auth_db as db
 import yaml
-from app import CSP, POLICY_PATH, STYLE, authenticate, client_ip, end_session, hasher, now
+from app import CSP, POLICY_PATH, STYLE, authenticate, client_ip, end_session, hasher, now, revoke_chat_key, revoke_chat_keys
 
 router = APIRouter()
 COOKIE = "croak_admin"
@@ -65,6 +65,7 @@ NAV = [
     ("/admin/events", "관리 감사", None),
     ("/admin/policy", "정책", None),
     ("/admin/users", "사용자", "admin"),
+    ("/admin/chat-keys", "대화 전용 키", "admin"),
 ]
 
 
@@ -507,7 +508,7 @@ def _users_page(conn, ctx: Ctx, message: str = "", error: str = "", status: int 
         f"<label>등급<br><select name='tier'>{tier_opts('standard')}</select></label>"
         "<label><input type='checkbox' name='roles' value='admin' style='width:auto'> 관리자</label>"
         "<label><input type='checkbox' name='roles' value='auditor' style='width:auto'> 보안 담당</label><button>만들기</button></form>"
-        "<p class='muted'>등급, 관리 권한, 비밀번호를 바꾸거나 잠그면 그 사용자의 로그인 세션이 모두 끝납니다. 다시 로그인하면 바뀐 권한이 적용됩니다.</p>"
+        "<p class='muted'>등급, 관리 권한, 비밀번호를 바꾸거나 잠그면 그 사용자의 로그인 세션이 모두 끝나고 대화 전용 키도 모두 폐기됩니다. 다시 로그인하면 바뀐 권한이 적용됩니다.</p>"
         "<h2>목록</h2><table><tr><th>아이디</th><th>등급</th><th>관리 권한</th><th>세션</th><th>조치</th></tr>"
         + "".join(rows)
         + "</table>"
@@ -521,10 +522,13 @@ def users_page(request: Request):
 
 
 def _end_all(conn, user: dict, reason: str, actor: str) -> int:
-    """Ends the user's opencode sessions. Admin sessions re-check the account on every request."""
+    """Ends the user's opencode sessions and revokes their chat keys, which carry the old tier and roles.
+
+    Admin sessions re-check the account on every request."""
     sessions = conn.execute("SELECT * FROM sessions WHERE user_id = %s AND ended_at IS NULL", (user["id"],)).fetchall()
     for s in sessions:
         end_session(conn, s, reason, actor=actor)
+    revoke_chat_keys(conn, user["id"], reason, actor=actor)
     return len(sessions)
 
 
@@ -607,6 +611,56 @@ async def user_action(request: Request, username: str, action: str):
             db.event(conn, "password_changed", actor=ctx.name, subject=username, ip=ip)
             return _users_page(conn, ctx, message=f"{username}: 비밀번호를 바꿨습니다. 세션 {n}개를 끝냈습니다.")
         return _users_page(conn, ctx, error="알 수 없는 조치입니다.", status=400)
+
+    return _guarded(request, "admin", render)
+
+
+# ---------------------------------------------------------------------------
+# Chat-only keys (admin): every open key, and revoking one
+# ---------------------------------------------------------------------------
+
+
+def _chat_keys_page(conn, ctx: Ctx, message: str = "", error: str = "", status: int = 200) -> HTMLResponse:
+    keys = conn.execute(
+        """SELECT k.*, u.username FROM chat_keys k JOIN users u ON u.id = k.user_id
+            WHERE k.revoked_at IS NULL AND k.expires_at > now() ORDER BY u.username, k.id"""
+    ).fetchall()
+    csrf = f"<input type='hidden' name='csrf' value='{h(ctx.csrf)}'>"
+    rows = "".join(
+        f"<tr><td>{h(k['username'])}</td><td>{h(k['name'])}</td>"
+        f"<td>{k['created_at'].astimezone(core.KST):%Y-%m-%d %H:%M}</td><td>{k['expires_at'].astimezone(core.KST):%Y-%m-%d %H:%M}</td>"
+        f"<td><form class='inline' method='post' action='/admin/chat-keys/{k['id']}/revoke'>{csrf}<button>폐기</button></form></td></tr>"
+        for k in keys
+    )
+    note = (f"<p class='ok'>{h(message)}</p>" if message else "") + (f"<p class='alert'>{h(error)}</p>" if error else "")
+    body = (
+        f"<h1>대화 전용 키</h1>{note}"
+        "<p class='muted'>사용자가 croakcode의 /chatkey로 만든 키입니다. Open WebUI 같은 대화 프로그램에 씁니다. "
+        "게이트는 이 키로 오는 도구 사용을 거부합니다.</p>"
+        "<table><tr><th>사용자</th><th>이름</th><th>만든 때</th><th>만료</th><th>조치</th></tr>"
+        + (rows or "<tr><td colspan='5'>열린 키가 없습니다.</td></tr>")
+        + "</table>"
+    )
+    return layout(ctx, "대화 전용 키", body, "/admin/chat-keys", status)
+
+
+@router.get("/admin/chat-keys")
+def chat_keys_page(request: Request):
+    return _guarded(request, "admin", lambda conn, ctx: _chat_keys_page(conn, ctx))
+
+
+@router.post("/admin/chat-keys/{key_id}/revoke")
+async def chat_key_revoke(request: Request, key_id: int):
+    form = await request.form()
+
+    def render(conn, ctx: Ctx):
+        if not _csrf_ok(ctx, str(form.get("csrf", ""))):
+            return _chat_keys_page(conn, ctx, error="페이지가 만료됐습니다. 다시 시도하세요.", status=400)
+        row = conn.execute("SELECT * FROM chat_keys WHERE id = %s AND revoked_at IS NULL", (key_id,)).fetchone()
+        if not row:
+            return _chat_keys_page(conn, ctx, error="없거나 이미 폐기된 키입니다.", status=404)
+        revoke_chat_key(conn, row, "revoked_by_admin", actor=ctx.name)
+        return _chat_keys_page(conn, ctx, message=f"키 '{row['name']}'를 폐기했습니다.")
 
     return _guarded(request, "admin", render)
 

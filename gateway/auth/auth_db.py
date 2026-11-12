@@ -73,6 +73,21 @@ CREATE TABLE IF NOT EXISTS execution_permits (
   issued_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS execution_permits_call ON execution_permits (session_id, tool, args_hash);
+-- Chat-only keys for chat programs such as Open WebUI on the user's own PC.
+-- The gate refuses tools with them. Only the key's hash is kept.
+CREATE TABLE IF NOT EXISTS chat_keys (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  key_alias TEXT UNIQUE NOT NULL,
+  key_hash TEXT UNIQUE NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  revoked_at TIMESTAMPTZ,
+  revoke_reason TEXT,
+  key_deleted BOOLEAN NOT NULL DEFAULT false
+);
+CREATE INDEX IF NOT EXISTS chat_keys_user ON chat_keys (user_id) WHERE revoked_at IS NULL;
 CREATE TABLE IF NOT EXISTS admin_sessions (
   id_hash TEXT PRIMARY KEY,
   user_id BIGINT NOT NULL REFERENCES users ON DELETE CASCADE,
