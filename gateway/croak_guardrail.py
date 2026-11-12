@@ -35,7 +35,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail  # noqa: E402
 
 import croak_models  # noqa: E402
 import croak_store  # noqa: E402
-from croak_core import SECRET_PATTERNS, Blocked, apply_deny_paths, answered_tool_calls, find, media_parts, media_pii_action, new_turn, Denied, Policy, apply_profile, check_access, load_policy, resolve, tier_for, tool_names  # noqa: E402
+from croak_core import CHAT_AGENT, SECRET_PATTERNS, Blocked, client_agent, apply_deny_paths, answered_tool_calls, find, media_parts, media_pii_action, new_turn, Denied, Policy, apply_profile, check_access, load_policy, resolve, tier_for, tool_names  # noqa: E402
 
 POLICY_PATH = os.environ.get("CROAK_POLICY", os.path.join(os.path.dirname(os.path.abspath(__file__)), "policy.yaml"))
 AGENT_HEADER = "x-croak-agent"
@@ -254,10 +254,16 @@ class CroakGuardrail(CustomGuardrail):
         try:
             policy = current_policy()
             croak_store.purge(policy.retention_days)
-            tier = tier_for(policy, key_metadata(user_api_key_dict).get("croak_tier"))
-            agent = (headers.get(AGENT_HEADER) or "").strip() or "unknown"
-            base.update(tier=tier.name, agent=agent)
-            check_access(tier, agent, tool_names(data.get("tools")))
+            meta = key_metadata(user_api_key_dict)
+            tier = tier_for(policy, meta.get("croak_tier"))
+            base.update(tier=tier.name)
+            agent = client_agent(meta, headers.get(AGENT_HEADER), data)
+            chat_key = agent == CHAT_AGENT and meta.get("croak_client") == "chat"
+            base.update(agent=agent, **({"client": "chat"} if chat_key else {}))
+            # A chat-only key sends no tools (client_agent refused them) and is
+            # not one of the tier's croakcode agents.
+            if not chat_key:
+                check_access(tier, agent, tool_names(data.get("tools")))
             check_session_owner(headers.get(SESSION_HEADER), who)
             await check_permits(headers.get(SESSION_HEADER), tier, messages)
             served = croak_models.apply_level(croak_models.current_models(MODELS_PATH).get(str(data.get("model"))), data)
@@ -315,6 +321,7 @@ class CroakGuardrail(CustomGuardrail):
             "pii": decision.profile.pii,
             "store_prompt": decision.profile.store_prompt,
             "session": headers.get(SESSION_HEADER),
+            "client": base.get("client"),
             # Which model served the request and how hard it thought (croak_models.apply_level).
             **{k: base.get(k) for k in ("alias", "served_model", "engine", "reasoning", "run")},
             # Masked text read from images, for the archive (which keeps no image data).

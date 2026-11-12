@@ -35,6 +35,26 @@ def issue(alias: str, user: dict, session_id: str, expires: datetime, now: datet
     return r.json()["key"]
 
 
+def issue_chat(alias: str, user: dict, key_id: int, expires: datetime, now: datetime) -> str:
+    """A chat-only key. The guardrail reads croak_client and refuses tools with it."""
+    seconds = max(60, int((expires - now).total_seconds()))
+    body = {
+        "key_alias": alias,
+        "user_id": user["username"],
+        "duration": f"{seconds}s",
+        "metadata": {
+            "croak_user": user["username"],
+            "croak_tier": user["tier"],
+            "croak_roles": list(user["roles"] or []),
+            "croak_client": "chat",
+            "croak_chat_key": key_id,
+        },
+    }
+    r = httpx.post(f"{GATE_URL}/key/generate", json=body, headers=_headers(), timeout=15)
+    r.raise_for_status()
+    return r.json()["key"]
+
+
 def delete(alias: str) -> bool:
     """Deletes the key by alias. A key that is already gone counts as deleted."""
     r = httpx.post(f"{GATE_URL}/key/delete", json={"key_aliases": [alias]}, headers=_headers(), timeout=15)

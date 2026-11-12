@@ -60,7 +60,10 @@ class CroakArchive(CustomLogger):
                 "usage": _usage(kwargs.get("complete_streaming_response") or response_obj),
             }
             keys = ("user", "tier", "agent", "model", "alias", "served_model", "engine", "reasoning", "session", "run", "duration_ms", "usage")
-            croak_store.append("usage", {k: common.get(k) for k in keys})
+            record = {k: common.get(k) for k in keys}
+            if croak.get("client"):  # a chat-only key's requests say so
+                record["client"] = croak["client"]
+            croak_store.append("usage", record)
             if croak.get("store_prompt") != "masked":
                 return
             messages = kwargs.get("messages") or []
