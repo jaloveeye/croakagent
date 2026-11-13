@@ -293,6 +293,29 @@ try:
         rows = compose("exec", "-T", "db", "psql", "-U", "croak", "-d", "croak_auth", "-tAc",
                        f"SELECT count(*) FROM execution_permits WHERE session_id = '{session_id}' AND tool = 'todowrite'").stdout.strip()
         check("PT-09: croakcode asked for the permit on its own", rows == "1", rows)
+
+        # 7. PT-10: a core tool called directly (not through tool_call). In use,
+        # read and bash results were refused although their permits existed.
+        with open(os.path.join(project, "hello.txt"), "w") as f:
+            f.write("hello\n")
+        texts, errors, events, stderr = turn('CALL_TOOL read {"filePath":"' + os.path.join(project, "hello.txt") + '"}')
+        session_id = next((e.get("sessionID") for e in events if e.get("sessionID")), "")
+        rows = compose("exec", "-T", "db", "psql", "-U", "croak", "-d", "croak_auth", "-tAc",
+                       f"SELECT count(*) FROM execution_permits WHERE session_id = '{session_id}' AND tool = 'read'").stdout.strip()
+        check("PT-10: croakcode asked for a permit for read", rows == "1", rows)
+        check("PT-10: a read result reaches the model under require_permits",
+              not errors and any(t.startswith("SEEN:") for t in texts), json.dumps({"texts": texts, "errors": errors, "stderr": stderr}, ensure_ascii=False))
+
+        # 8. PT-11: a call a policy plugin refuses before its permit (a key
+        # file path) sends croakcode's fixed "never ran" text, which the gate
+        # lets through. In use, such refused calls made the gate refuse the
+        # whole session.
+        os.makedirs(os.path.join(project, ".ssh"), exist_ok=True)
+        with open(os.path.join(project, ".ssh", "id_rsa"), "w") as f:
+            f.write("fake\n")
+        texts, errors, events, stderr = turn('CALL_TOOL read {"filePath":"' + os.path.join(project, ".ssh", "id_rsa") + '"}')
+        check("PT-11: a call that never ran does not block the session",
+              not errors and any(t.startswith("SEEN: [croak]") for t in texts), json.dumps({"texts": texts, "errors": errors, "stderr": stderr}, ensure_ascii=False))
 finally:
     if os.environ.get("KEEP") != "1":
         compose("down", "-v", check=False)

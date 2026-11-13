@@ -111,3 +111,23 @@ class Reconcile(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UnrunResults(unittest.TestCase):
+    """A call that never ran sends croakcode's fixed text, which needs no permit."""
+
+    def _history(self, content):
+        messages = conversation(("c1", "bash", '{"command":"ls"}'), answered=[])
+        messages.append({"role": "tool", "tool_call_id": "c1", "content": content})
+        return messages
+
+    def test_exact_text_needs_no_permit(self):
+        from croak_core import UNRUN_RESULT
+        self.assertEqual(answered_tool_calls(self._history(UNRUN_RESULT)), [])
+        self.assertEqual(answered_tool_calls(self._history([{"type": "text", "text": UNRUN_RESULT}])), [])
+
+    def test_any_other_text_still_needs_one(self):
+        from croak_core import UNRUN_RESULT
+        for content in (UNRUN_RESULT + " secret", "error: file not found", [{"type": "text", "text": UNRUN_RESULT}, {"type": "text", "text": "x"}]):
+            with self.subTest(content=content):
+                self.assertEqual(len(answered_tool_calls(self._history(content))), 1)
