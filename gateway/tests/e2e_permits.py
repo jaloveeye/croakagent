@@ -316,6 +316,12 @@ try:
         texts, errors, events, stderr = turn('CALL_TOOL read {"filePath":"' + os.path.join(project, ".ssh", "id_rsa") + '"}')
         check("PT-11: a call that never ran does not block the session",
               not errors and any(t.startswith("SEEN: [croak]") for t in texts), json.dumps({"texts": texts, "errors": errors, "stderr": stderr}, ensure_ascii=False))
+
+        # 9. PT-12: tool_search (croakcode's deferred-tool finder) asks for a
+        # permit too. In use, its results were refused.
+        texts, errors, events, stderr = turn('CALL_TOOL tool_search {"query":"todo"}')
+        check("PT-12: a tool_search result reaches the model under require_permits",
+              not errors and any(t.startswith("SEEN:") for t in texts), json.dumps({"texts": texts, "errors": errors, "stderr": stderr}, ensure_ascii=False))
 finally:
     if os.environ.get("KEEP") != "1":
         compose("down", "-v", check=False)
