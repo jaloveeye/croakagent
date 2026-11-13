@@ -49,8 +49,12 @@ PERMIT_KEY_FILE = os.environ.get("CROAK_PERMIT_KEY_FILE", "/run/croak-secrets/pe
 INTERNAL_TOKEN = hashlib.sha256(b"croak-internal:" + os.environ.get("LITELLM_MASTER_KEY", "").encode()).hexdigest()
 DATA_DIR = os.environ.get("CROAK_DATA", "/data")
 MANIFEST_PATH = os.environ.get("CROAK_MANIFEST_PATH", "/downloads/manifest.json")
-# Permits are kept as long as a login session can last (it ends on Sunday).
-PERMIT_KEEP_DAYS = 8
+# A conversation outlives the login session it began in (the user logs in again
+# and goes on), and the gate checks its old tool results on every request. So
+# permits are kept as long as the gate's other records (policy retention_days,
+# 90 by default), not for one login week. An older conversation is refused and
+# starts over in a new session.
+PERMIT_KEEP_DAYS = int(os.environ.get("CROAK_PERMIT_KEEP_DAYS", "90"))
 IP_LIMIT = 20  # failed logins per IP per lock window
 SWEEP_SECONDS = 300
 
