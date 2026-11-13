@@ -52,7 +52,25 @@ croakcode는 TypeScript로, 게이트는 Python으로 같은 인자의 해시를
 
 세 곳의 테스트가 같은 해시 표로 이 규칙을 확인한다. `auth/tests/test_permit_core.py`, `tests/test_permits.py`, croakcode의 `test/delegation/permit-parity.test.ts`다. 인자를 해석할 수 없는 호출은 어떤 허가와도 맞지 않으므로 거부된다.
 
+## 대조하는 도구 결과
+
+게이트는 요청에 실린 대화 기록 전체의 도구 결과를 대조한다. 새로 실행한 도구만 보지 않는다. 2026-11-12에 운영에서 `require_permits`를 두 번 켰고, 두 번 모두 허가 없는 결과 때문에 세션이 거부됐다. 그때 찾은 경로와 지금의 규칙을 적는다.
+
+| 경로 | 처리 |
+|---|---|
+| 모델이 부른 도구 | croakcode가 실행 전에 허가를 받는다 |
+| 허가 전에 끝난 호출 | croakcode가 결과를 정해진 문장으로 바꿔 보낸다. 게이트는 그 문장만 허가 없이 받는다 |
+| `tool_search` | 실행 전에 허가를 받는다 |
+| 사용자가 직접 실행한 셸(`!명령`) | `bash` 허가를 받는다. 받지 못하면 실행하지 않는다 |
+| 사용자가 부른 하위 작업 | `task` 허가를 받는다 |
+| 구조화된 출력 도구 | `StructuredOutput` 허가를 받는다 |
+| 복제한 세션의 복사된 호출 | 복제 세션이 첫 요청 전에 호출마다 허가를 다시 받는다 |
+
+- 허가 전에 끝난 호출은 정책 플러그인이 막은 호출 같은 경우다. 정해진 문장은 `croak_core.UNRUN_RESULT`와 croakcode의 `Permit.UNRUN_RESULT`가 같아야 한다. 글자가 하나라도 다르면 허가가 필요하다. 문장이 고정이라 그 통로로는 실행 결과를 내보낼 수 없다.
+- 허가는 다른 세션으로 넘어가지 않는다. 복제한 세션도 예외가 아니다. 그래서 croakcode가 새 세션 이름으로 다시 받는다.
+- 허가 기록은 90일 동안 둔다(`CROAK_PERMIT_KEEP_DAYS`). 대화는 로그인 세션보다 오래 이어지고, 게이트는 요청마다 예전 도구 결과도 대조한다. 처음에는 8일이었다. 8일이 지난 대화는 모두 거부될 값이었다. 90일이 지난 대화는 새 세션에서 다시 시작한다.
+
 ## 검증
 
 - 단위 테스트: `auth/tests/test_permit_core.py`, `tests/test_permits.py`. 가드레일 대조 테스트는 litellm이 있어야 해서, 로컬에서는 건너뛰고 E2E가 게이트 이미지 안에서 돌린다.
-- E2E: `python3 tests/e2e_permits.py <작업 폴더> [croakcode의 upstream/packages/opencode 경로]`. 로컬 Docker 스택에서 발급, 서명, 거부 경우, 대조를 확인한다. croakcode 경로를 주면 실제 클라이언트(PT-07), 허가 필수 상태의 한 턴(PT-08), 로그인만으로 켜지는 허가(PT-09)도 확인한다. PT-08은 가짜 모델의 `CALL_TOOL` 지시로 `tool_call`을 부른다.
+- E2E: `python3 tests/e2e_permits.py <작업 폴더> [croakcode의 upstream/packages/opencode 경로]`. 로컬 Docker 스택에서 발급, 서명, 거부 경우, 대조를 확인한다. croakcode 경로를 주면 실제 클라이언트(PT-07), 허가 필수 상태의 한 턴(PT-08), 로그인만으로 켜지는 허가(PT-09)도 확인한다. PT-08은 가짜 모델의 `CALL_TOOL` 지시로 `tool_call`을 부른다. PT-10은 `read` 직접 호출, PT-11은 허가 전에 막힌 호출, PT-12는 `tool_search`, PT-13은 세션 복제를 확인한다.

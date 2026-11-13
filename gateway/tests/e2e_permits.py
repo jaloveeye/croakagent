@@ -254,10 +254,10 @@ try:
                "CROAKCODE_DEV_CLIENT_VERSION": "1.0.0",
                "CROAKCODE_CONFIG_DIR": os.path.join(CROAKCODE, "..", "..", ".croakcode")}
 
-        def turn(prompt):
+        def turn(prompt, *more):
             done = subprocess.run(
                 ["bun", "run", "--conditions=browser", "src/index.ts", "run", "--format", "json", "--dir", project,
-                 "-m", "litellm-head/qwen3.8-27b-nvfp4", "--agent", "dev-safe", prompt],
+                 "-m", "litellm-head/qwen3.8-27b-nvfp4", "--agent", "dev-safe", *more, prompt],
                 cwd=CROAKCODE, capture_output=True, text=True, timeout=180, env=env, stdin=subprocess.DEVNULL,
             )
             events = [json.loads(line) for line in done.stdout.splitlines() if line.startswith("{")]
@@ -303,6 +303,7 @@ try:
         rows = compose("exec", "-T", "db", "psql", "-U", "croak", "-d", "croak_auth", "-tAc",
                        f"SELECT count(*) FROM execution_permits WHERE session_id = '{session_id}' AND tool = 'read'").stdout.strip()
         check("PT-10: croakcode asked for a permit for read", rows == "1", rows)
+        read_session = session_id
         check("PT-10: a read result reaches the model under require_permits",
               not errors and any(t.startswith("SEEN:") for t in texts), json.dumps({"texts": texts, "errors": errors, "stderr": stderr}, ensure_ascii=False))
 
@@ -316,6 +317,24 @@ try:
         texts, errors, events, stderr = turn('CALL_TOOL read {"filePath":"' + os.path.join(project, ".ssh", "id_rsa") + '"}')
         check("PT-11: a call that never ran does not block the session",
               not errors and any(t.startswith("SEEN: [croak]") for t in texts), json.dumps({"texts": texts, "errors": errors, "stderr": stderr}, ensure_ascii=False))
+
+        # 9. PT-12: tool_search (croakcode's deferred-tool finder) asks for a
+        # permit too. In use, its results were refused.
+        texts, errors, events, stderr = turn('CALL_TOOL tool_search {"query":"todo"}')
+        check("PT-12: a tool_search result reaches the model under require_permits",
+              not errors and any(t.startswith("SEEN:") for t in texts), json.dumps({"texts": texts, "errors": errors, "stderr": stderr}, ensure_ascii=False))
+
+        # 10. PT-13: a forked session copies its parent's tool calls under a
+        # new session id. A permit does not carry over to another session, so
+        # croakcode asks again for each copied call under the fork's own id.
+        texts, errors, events, stderr = turn("fork and go on", "--session", read_session, "--fork")
+        forked = next((e.get("sessionID") for e in events if e.get("sessionID")), "")
+        check("PT-13: the fork is a new session", bool(forked) and forked != read_session, f"{read_session} {forked}")
+        check("PT-13: a forked session's copied tool results pass",
+              not errors and bool(texts), json.dumps({"texts": texts, "errors": errors, "stderr": stderr}, ensure_ascii=False))
+        rows = compose("exec", "-T", "db", "psql", "-U", "croak", "-d", "croak_auth", "-tAc",
+                       f"SELECT count(*) FROM execution_permits WHERE session_id = '{forked}' AND tool = 'read'").stdout.strip()
+        check("PT-13: the fork asked for its own permit for the copied read", rows == "1", rows)
 finally:
     if os.environ.get("KEEP") != "1":
         compose("down", "-v", check=False)
