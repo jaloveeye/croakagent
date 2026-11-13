@@ -72,6 +72,13 @@ def page(version: str, gate: str, fingerprint: str, files: dict[str, bytes]) -> 
     windows = (f"curl.exe -fsSLk --proto =https {gate}/download/install.ps1 -o $env:TEMP\\croak-install.ps1; "
                "powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP\\croak-install.ps1")
 
+    # The certificate's fingerprint, as above; a file hash (certutil -hashfile) differs.
+    fp_windows = '(New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 "$PWD\\ca.crt").GetCertHashString("SHA256")'
+    fp_unix = "openssl x509 -in ca.crt -noout -fingerprint -sha256"
+    dockerfile = ("FROM ghcr.io/open-webui/open-webui:main\n"
+                  "COPY certs/croak-ca.crt /usr/local/share/ca-certificates/croak-ca.crt\n"
+                  "RUN update-ca-certificates")
+
     def command(text: str) -> str:
         return (f'<div class="cmd"><code>{e(text)}</code>'
                 f'<button type="button" data-copy="{e(text, quote=True)}">복사</button></div>')
@@ -114,7 +121,20 @@ a.dl {{ display:inline-block; background:var(--accent); color:var(--bg); text-de
 
 <section><h2>인증서</h2>
 <p>처음 설치할 때 이 게이트의 인증서를 믿고 저장한다. 그 뒤 설치와 업데이트는 저장한 인증서로만 확인한다. 설치 화면에 뜨는 지문이 아래 값과 같은지 비교할 수 있다.</p>
-<p class="fp">{e(fingerprint)}</p></section>
+<p class="fp">{e(fingerprint)}</p>
+<p><a class="dl" href="ca.crt" download>인증서 내려받기 (ca.crt)</a></p></section>
+
+<section id="chat"><h2>대화 프로그램에서 쓰기 (Open WebUI 등)</h2>
+<ol>
+<li>croakcode에서 <code>/chatkey</code>를 입력해 대화 전용 키를 만든다. 키는 그때 한 번만 보인다.</li>
+<li>대화 프로그램의 OpenAI API 연결에 주소 <code>{e(gate)}/v1</code>과 그 키를 넣는다.</li>
+<li>대화 프로그램이 위의 인증서(ca.crt)를 믿게 한다. 내려받은 인증서의 SHA-256 지문이 위의 값과 같은지 먼저 비교한다. 대소문자와 콜론은 무시한다.</li>
+</ol>
+<h3>지문 확인 (Windows PowerShell)</h3>{command(fp_windows)}
+<h3>지문 확인 (Linux, WSL, macOS)</h3>{command(fp_unix)}
+<p>인증서는 그 대화 프로그램에만 등록한다. Windows나 브라우저 전체의 신뢰 목록에는 넣지 않는다. Open WebUI를 Docker로 쓰면 이미지에 등록한다. 내려받은 ca.crt를 <code>certs/croak-ca.crt</code>로 두고 아래 Dockerfile로 이미지를 만든다. docker-compose.yml에는 <code>REQUESTS_CA_BUNDLE: /etc/ssl/certs/ca-certificates.crt</code>를 더한다.</p>
+{command(dockerfile)}
+<p class="muted">대화 전용 키로는 도구를 쓸 수 없다. 대화 프로그램의 웹 검색과 코드 실행은 끈다.</p></section>
 </main>
 <script>
 document.querySelectorAll("button[data-copy]").forEach((button) => {{

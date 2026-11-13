@@ -62,6 +62,11 @@ class InstallerTest(unittest.TestCase):
             self.assertIn(self.GATE + '/download/install.sh | bash', index)
             self.assertIn('href="croakcode-setup-windows.cmd"', index)
             self.assertIn(hashlib.sha256(bytes([0, 1, 2])).hexdigest(), index)
+            # Chat programs: the CA download, the /v1 address and the Docker registration.
+            self.assertIn('href="ca.crt" download', index)
+            self.assertIn('id="chat"', index)
+            self.assertIn(self.GATE + '/v1', index)
+            self.assertIn('RUN update-ca-certificates', index)
 
     def test_without_a_gate_address_installers_stay_as_they_are(self):
         with tempfile.TemporaryDirectory() as root:
