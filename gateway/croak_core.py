@@ -374,6 +374,21 @@ UNREADABLE_ARGS = "unreadable"
 TOOL_PROXY = "tool_call"
 
 
+# What croakcode sends back for a tool call that never ran because it had no
+# permit (src/delegation/permit.ts UNRUN_RESULT). Exactly this text needs no
+# permit: it carries nothing, so it cannot carry a result out.
+UNRUN_RESULT = "[croak] 이 도구 호출은 실행되지 않았다."
+
+
+def _result_text(content: Any) -> str | None:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list) and len(content) == 1 and isinstance(content[0], dict) and content[0].get("type") == "text":
+        text = content[0].get("text")
+        return text if isinstance(text, str) else None
+    return None
+
+
 def answered_tool_calls(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
     """Tool calls whose result the request sends back to the model.
 
@@ -386,6 +401,7 @@ def answered_tool_calls(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
         str(m.get("tool_call_id"))
         for m in messages
         if isinstance(m, dict) and m.get("role") == "tool" and m.get("tool_call_id")
+        and _result_text(m.get("content")) != UNRUN_RESULT
     }
     calls: list[dict[str, str]] = []
     for message in messages:
