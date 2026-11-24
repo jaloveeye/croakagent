@@ -324,6 +324,14 @@ try:
         check("PT-12: a tool_search result reaches the model under require_permits",
               not errors and any(t.startswith("SEEN:") for t in texts), json.dumps({"texts": texts, "errors": errors, "stderr": stderr}, ensure_ascii=False))
 
+        # 9b. PT-14: a model sends tool_call's input as a JSON string. croakcode
+        # unwraps it and the gate reads it the same way. In use, the two sides
+        # read it differently and the whole session was refused.
+        texts, errors, events, stderr = turn(
+            'CALL_TOOL tool_call ' + json.dumps({"name": "todowrite", "input": json.dumps({"todos": [{"content": "s", "status": "pending", "priority": "low"}]})}))
+        check("PT-14: tool_call input sent as a JSON string passes",
+              not errors and any(t.startswith("SEEN:") for t in texts), json.dumps({"texts": texts, "errors": errors, "stderr": stderr}, ensure_ascii=False))
+
         # 10. PT-13: a forked session copies its parent's tool calls under a
         # new session id. A permit does not carry over to another session, so
         # croakcode asks again for each copied call under the fork's own id.
