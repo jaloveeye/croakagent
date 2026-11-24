@@ -374,6 +374,28 @@ UNREADABLE_ARGS = "unreadable"
 TOOL_PROXY = "tool_call"
 
 
+def _reject_constant(name: str) -> Any:
+    raise ValueError(f"not JSON: {name}")  # NaN and Infinity, which JSON.parse refuses
+
+
+def proxy_input(value: Any) -> dict[str, Any] | None:
+    """The arguments a tool_call proxy call passes to its tool, read like
+    croakcode's Permit.proxyInput: an object as it is, a JSON string that holds
+    an object, and nothing at all as {}. Anything else is None: croakcode does
+    not run such a call. A model sometimes sends the arguments as a JSON string;
+    read differently on the two sides, the permit and this check missed each
+    other and the whole session was refused."""
+    if value is None:
+        return {}
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value, parse_constant=_reject_constant)
+        except ValueError:
+            return None
+        return proxy_input(parsed if parsed is not None else 0)
+    return value if isinstance(value, dict) else None
+
+
 # What croakcode sends back for a tool call that never ran because it had no
 # permit (src/delegation/permit.ts UNRUN_RESULT). Exactly this text needs no
 # permit: it carries nothing, so it cannot carry a result out.
@@ -417,8 +439,10 @@ def answered_tool_calls(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
                 args = json.loads(raw) if isinstance(raw, str) else raw if isinstance(raw, dict) else {}
                 # croakcode's deferred-tool proxy: the permit is for the tool it
                 # called, under that tool's own name and arguments.
-                if name == TOOL_PROXY and isinstance(args, dict) and isinstance(args.get("name"), str) and isinstance(args.get("input"), dict):
-                    name, args = args["name"], args["input"]
+                if name == TOOL_PROXY and isinstance(args, dict) and isinstance(args.get("name"), str):
+                    inner = proxy_input(args.get("input"))
+                    if inner is not None:
+                        name, args = args["name"], inner
                 digest = args_hash(args)
             except (ValueError, TypeError):
                 digest = UNREADABLE_ARGS

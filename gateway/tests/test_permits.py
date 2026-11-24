@@ -1,5 +1,6 @@
 """Execution permits on the gate: which tool results need a permit, and the check."""
 import asyncio
+import json
 import os
 import sys
 import unittest
@@ -56,7 +57,8 @@ class AnsweredCalls(unittest.TestCase):
         self.assertEqual(proxied, [{"tool": "bash", "args": PARITY[0][1]}])
 
     def test_malformed_tool_call_stays_a_tool_call(self):
-        for args in ('{"name":"bash"}', '{"name":1,"input":{}}', '{"input":{"command":"ls"}}'):
+        # A missing input is {} (croakcode runs the tool with {}); see ProxyInput.
+        for args in ('{"name":1,"input":{}}', '{"input":{"command":"ls"}}', '{"name":"bash","input":[1]}'):
             with self.subTest(args=args):
                 self.assertEqual(answered_tool_calls(conversation(("c1", "tool_call", args)))[0]["tool"], "tool_call")
 
@@ -131,3 +133,25 @@ class UnrunResults(unittest.TestCase):
         for content in (UNRUN_RESULT + " secret", "error: file not found", [{"type": "text", "text": UNRUN_RESULT}, {"type": "text", "text": "x"}]):
             with self.subTest(content=content):
                 self.assertEqual(len(answered_tool_calls(self._history(content))), 1)
+
+
+class ProxyInput(unittest.TestCase):
+    """tool_call arguments are read like croakcode's Permit.proxyInput."""
+
+    def calls(self, input_value, *, present=True):
+        proxy = {"name": "todowrite", **({"input": input_value} if present else {})}
+        return answered_tool_calls(conversation(("c1", "tool_call", json.dumps(proxy))))
+
+    def test_object_string_and_missing(self):
+        todos = {"todos": [{"content": "x"}]}
+        self.assertEqual(self.calls(todos), [{"tool": "todowrite", "args": args_hash(todos)}])
+        # The arguments as a JSON string: the permit croakcode asked for is for the object.
+        self.assertEqual(self.calls(json.dumps(todos)), [{"tool": "todowrite", "args": args_hash(todos)}])
+        self.assertEqual(self.calls(None, present=False), [{"tool": "todowrite", "args": args_hash({})}])
+        self.assertEqual(self.calls(None), [{"tool": "todowrite", "args": args_hash({})}])
+
+    def test_anything_else_stays_the_proxy_call(self):
+        for value in ("[1]", "not json", "3", "NaN", [1], 3):
+            with self.subTest(value=value):
+                got = self.calls(value)
+                self.assertEqual(got[0]["tool"], "tool_call")
